@@ -9,7 +9,7 @@ import (
 )
 
 // Version is the library and CLI semantic version.
-const Version = "0.2.0"
+const Version = "0.4.0"
 
 // OutputFormat selects the representation written by ExtractFile or Export.
 type OutputFormat string
@@ -32,6 +32,21 @@ const (
 type ExtractOptions struct {
 	OutputDirectory string
 	Format          OutputFormat
+	// Includes limits output to matching asset names, rendition file names,
+	// or "asset/file" paths. Patterns use path.Match glob syntax.
+	Includes []string
+	// Progress is called synchronously before each selected item is decoded or
+	// written. Current is one-based and callbacks are never concurrent.
+	Progress func(Progress)
+}
+
+// Progress describes the item currently being processed by an export.
+type Progress struct {
+	Current        int    `json:"current"`
+	Total          int    `json:"total"`
+	RenditionIndex int    `json:"rendition_index"`
+	AssetName      string `json:"asset_name,omitempty"`
+	FileName       string `json:"file_name"`
 }
 
 // ExtractResult is the format-independent summary returned to library and CLI
@@ -70,11 +85,21 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 	if options.OutputDirectory == "" {
 		return ExtractResult{}, fmt.Errorf("output directory is required when exporting a parsed Catalog")
 	}
+	matcher, err := newRenditionMatcher(options.Includes)
+	if err != nil {
+		return ExtractResult{}, err
+	}
+	if format == FormatJSON && len(options.Includes) != 0 {
+		return ExtractResult{}, fmt.Errorf("include filters are not supported by the json format")
+	}
+	if len(options.Includes) != 0 && !matcher.matchesCatalog(c) {
+		return ExtractResult{}, fmt.Errorf("no renditions match include patterns %q", options.Includes)
+	}
 
 	summary := ExtractResult{Format: format}
 	switch format {
 	case FormatResources:
-		result, err := c.ExportResources(options.OutputDirectory)
+		result, err := c.exportLogicalAssets(options.OutputDirectory, false, matcher, options.Progress)
 		if err != nil {
 			return summary, err
 		}
@@ -82,7 +107,7 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 		summary.Written, summary.Failed = result.Written, result.Failed
 
 	case FormatXCAssets:
-		result, err := c.ExportXCAssets(options.OutputDirectory)
+		result, err := c.exportLogicalAssets(options.OutputDirectory, true, matcher, options.Progress)
 		if err != nil {
 			return summary, err
 		}
@@ -90,7 +115,7 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 		summary.Written, summary.Failed = result.Written, result.Failed
 
 	case FormatRaw:
-		result, err := c.ExportRaw(options.OutputDirectory)
+		result, err := c.exportRaw(options.OutputDirectory, matcher, options.Progress)
 		if err != nil {
 			return summary, err
 		}
@@ -98,7 +123,7 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 		summary.Written, summary.Skipped = result.Written, result.Skipped
 
 	case FormatPNG:
-		result, err := c.ExportImages(options.OutputDirectory)
+		result, err := c.exportImages(options.OutputDirectory, matcher, options.Progress)
 		if err != nil {
 			return summary, err
 		}
@@ -113,6 +138,7 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 		if err := os.MkdirAll(absolute, 0o755); err != nil {
 			return summary, fmt.Errorf("create JSON output directory: %w", err)
 		}
+		reportProgress(options.Progress, 1, 1, -1, Rendition{CSI: CSI{Name: "catalog.json"}})
 		data, err := json.MarshalIndent(c, "", "  ")
 		if err != nil {
 			return summary, err
@@ -125,6 +151,16 @@ func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
 		summary.Written = 1
 	}
 	return summary, nil
+}
+
+func reportProgress(callback func(Progress), current, total, index int, rendition Rendition) {
+	if callback == nil {
+		return
+	}
+	callback(Progress{
+		Current: current, Total: total, RenditionIndex: index,
+		AssetName: rendition.AssetName, FileName: rendition.CSI.Name,
+	})
 }
 
 // ParseOutputFormat validates a user-facing format name and accepts a few

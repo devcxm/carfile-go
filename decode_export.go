@@ -28,6 +28,10 @@ type ImageExportRecord struct {
 // ExportImages decodes compressed bitmap renditions and writes PNG files plus
 // a manifest describing both successful and unsupported renditions.
 func (c *Catalog) ExportImages(directory string) (ImageExportResult, error) {
+	return c.exportImages(directory, renditionMatcher{}, nil)
+}
+
+func (c *Catalog) exportImages(directory string, matcher renditionMatcher, progress func(Progress)) (ImageExportResult, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return ImageExportResult{}, err
@@ -35,11 +39,23 @@ func (c *Catalog) ExportImages(directory string) (ImageExportResult, error) {
 	if err := os.MkdirAll(absolute, 0o755); err != nil {
 		return ImageExportResult{}, fmt.Errorf("create image export directory: %w", err)
 	}
+	total := 0
+	for _, rendition := range c.Renditions {
+		if matcher.matches(rendition) && rendition.CSI.Payload.CompressionType != nil {
+			total++
+		}
+	}
+	current := 0
 	result := ImageExportResult{Directory: absolute}
 	for index, rendition := range c.Renditions {
+		if !matcher.matches(rendition) {
+			continue
+		}
 		if rendition.CSI.Payload.CompressionType == nil {
 			continue
 		}
+		current++
+		reportProgress(progress, current, total, index, rendition)
 		record := ImageExportRecord{
 			Index: index, AssetName: rendition.AssetName, Name: rendition.CSI.Name,
 			Compression: rendition.CSI.Payload.Compression,

@@ -64,7 +64,7 @@ type recoveredInfo struct {
 // subimage back into an individual PNG. Original RAWD data such as SVG and
 // JPEG files is copied without re-encoding.
 func (c *Catalog) ExportXCAssets(directory string) (RecoveryResult, error) {
-	return c.exportLogicalAssets(directory, true)
+	return c.exportLogicalAssets(directory, true, renditionMatcher{}, nil)
 }
 
 // ExportRecovered is kept for compatibility. New callers should use
@@ -76,10 +76,10 @@ func (c *Catalog) ExportRecovered(directory string) (RecoveryResult, error) {
 // ExportResources recovers all logical assets into ordinary directories,
 // grouped by asset name without generating Asset Catalog metadata.
 func (c *Catalog) ExportResources(directory string) (RecoveryResult, error) {
-	return c.exportLogicalAssets(directory, false)
+	return c.exportLogicalAssets(directory, false, renditionMatcher{}, nil)
 }
 
-func (c *Catalog) exportLogicalAssets(directory string, xcassets bool) (RecoveryResult, error) {
+func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher renditionMatcher, progress func(Progress)) (RecoveryResult, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return RecoveryResult{}, err
@@ -98,12 +98,19 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool) (Recovery
 
 	groups := make(map[string]map[string]recoveryCandidate)
 	appIconSets := make(map[string]bool)
+	for _, rendition := range c.Renditions {
+		if rendition.CSI.Layout == 1010 && rendition.AssetName != "" {
+			appIconSets[rendition.AssetName] = true
+		}
+	}
 	for index, rendition := range c.Renditions {
+		if !matcher.matches(rendition) {
+			continue
+		}
 		if rendition.AssetName == "" || rendition.CSI.Name == "" {
 			continue
 		}
 		if rendition.CSI.Layout == 1010 {
-			appIconSets[rendition.AssetName] = true
 			continue
 		}
 		byName := groups[rendition.AssetName]
@@ -126,6 +133,11 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool) (Recovery
 		assetNames = append(assetNames, name)
 	}
 	sort.Strings(assetNames)
+	total := 0
+	for _, byName := range groups {
+		total += len(byName)
+	}
+	current := 0
 	decodedTargets := make(map[int]image.Image)
 	setNameCounts := make(map[string]int)
 	createdCatalogGroups := make(map[string]bool)
@@ -175,6 +187,8 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool) (Recovery
 		contents := recoveredContents{Info: recoveredInfo{Version: 1, Author: "carfile-go"}}
 		for _, candidate := range candidates {
 			r := candidate.rendition
+			current++
+			reportProgress(progress, current, total, candidate.index, r)
 			name := recoveredPathName(r.CSI.Name, fmt.Sprintf("rendition-%d.png", candidate.index))
 			record := RecoveryRecord{Index: candidate.index, AssetName: assetName, Name: r.CSI.Name}
 			path := filepath.Join(setDirectory, name)

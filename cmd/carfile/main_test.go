@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	carfile "carfile-go"
 )
 
 func TestVersion(t *testing.T) {
@@ -33,5 +35,30 @@ func TestInvalidFormat(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unsupported output format") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRepeatedIncludeFlag(t *testing.T) {
+	var values stringListFlag
+	if err := values.Set("AppIcon"); err != nil {
+		t.Fatal(err)
+	}
+	if err := values.Set("*@2x.png"); err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 2 || values[0] != "AppIcon" || values[1] != "*@2x.png" {
+		t.Fatalf("values = %q", values)
+	}
+}
+
+func TestProgressPrinter(t *testing.T) {
+	var output bytes.Buffer
+	printer := &progressPrinter{writer: &output}
+	printer.report(carfile.Progress{
+		Current: 1, Total: 2, RenditionIndex: 4,
+		AssetName: "AppIcon", FileName: "Icon@2x.png",
+	})
+	if got, want := output.String(), "[ 50% 1/2] AppIcon/Icon@2x.png\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }

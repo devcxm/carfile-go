@@ -25,6 +25,8 @@ Usage:
 Options:
   -o, --output DIR       Output directory
   -f, --format FORMAT    resources (default), xcassets, raw, png, or json
+  -i, --include PATTERN  Include asset/file glob; may be repeated
+  -q, --quiet            Disable progress output
   -v, --version          Print version
   -h, --help             Show help
 ```
@@ -34,6 +36,8 @@ Examples:
 ```sh
 carfile Assets.car
 carfile -o output Assets.car
+carfile -i AppIcon Assets.car
+carfile -i 'myBannerImage_*' -i '*@2x.png' Assets.car
 carfile --format xcassets --output restored Assets.car
 carfile -f raw -o payloads Assets.car
 carfile -f json -o metadata Assets.car
@@ -50,6 +54,44 @@ carfile -f json -o metadata Assets.car
 | `json` | Parsed CAR metadata in `catalog.json`. |
 
 Every extraction directory includes a machine-readable manifest except the JSON format, whose output is already self-describing.
+
+### Selective extraction
+
+`--include`/`-i` accepts Go-style glob patterns and can be repeated. Patterns are ORed and are matched against the logical asset name, rendition filename, and `asset/file` path. Filtering happens before bitmap decompression and PNG encoding.
+
+```sh
+# Both @2x and @3x renditions from one logical asset
+carfile -i myBannerImage_de Assets.car
+
+# One exact rendition
+carfile -i myBannerImage_de@2x.png Assets.car
+
+# Several asset families
+carfile -i 'HomePage_*' -i 'AppIcon' Assets.car
+
+# Precise asset/file selection
+carfile -i 'AppIcon/Icon-iPhone-60@3x.png' Assets.car
+```
+
+The same filter is available to library callers through `ExtractOptions.Includes`. Include filters apply to `resources`, `xcassets`, `raw`, and `png`; JSON output always describes the complete catalog.
+
+For a logical image stored inside a packed atlas, use `resources` or `xcassets`; these formats resolve the internal link and crop the requested image. The `png` format intentionally operates on directly stored physical bitmap renditions, while `raw` operates on physical payloads.
+
+### Progress
+
+The CLI displays the current percentage, item count, asset name, and rendition filename while extracting. Interactive terminals reuse one line; redirected output uses one event per line. Use `--quiet`/`-q` to disable progress.
+
+Library callers can receive the same synchronous, serial progress events:
+
+```go
+result, err := carfile.ExtractFile("Assets.car", carfile.ExtractOptions{
+    Format:          carfile.FormatResources,
+    OutputDirectory: "output",
+    Progress: func(event carfile.Progress) {
+        log.Printf("%d/%d %s/%s", event.Current, event.Total, event.AssetName, event.FileName)
+    },
+})
+```
 
 ## Library
 
@@ -68,6 +110,7 @@ func main() {
     result, err := carfile.ExtractFile("Assets.car", carfile.ExtractOptions{
         Format:          carfile.FormatXCAssets,
         OutputDirectory: "restored",
+        Includes:        []string{"AppIcon", "myBannerImage_*"},
     })
     if err != nil {
         log.Fatal(err)

@@ -33,6 +33,10 @@ type ExportRecord struct {
 // decompressors. Standard RAWD files are unwrapped; CELM files have their
 // 16-byte wrapper removed but remain compressed.
 func (c *Catalog) ExportRaw(directory string) (ExportResult, error) {
+	return c.exportRaw(directory, renditionMatcher{}, nil)
+}
+
+func (c *Catalog) exportRaw(directory string, matcher renditionMatcher, progress func(Progress)) (ExportResult, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return ExportResult{}, err
@@ -41,8 +45,20 @@ func (c *Catalog) ExportRaw(directory string) (ExportResult, error) {
 		return ExportResult{}, fmt.Errorf("create export directory: %w", err)
 	}
 
-	result := ExportResult{Directory: absolute, Files: make([]ExportRecord, 0, len(c.Renditions))}
+	total := 0
+	for _, rendition := range c.Renditions {
+		if matcher.matches(rendition) {
+			total++
+		}
+	}
+	current := 0
+	result := ExportResult{Directory: absolute, Files: make([]ExportRecord, 0, total)}
 	for index, rendition := range c.Renditions {
+		if !matcher.matches(rendition) {
+			continue
+		}
+		current++
+		reportProgress(progress, current, total, index, rendition)
 		record := ExportRecord{
 			Index: index, AssetName: rendition.AssetName, RenditionName: rendition.CSI.Name,
 			Layout: rendition.CSI.LayoutName, PixelFormat: rendition.CSI.PixelFormat,
