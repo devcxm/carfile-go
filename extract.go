@@ -1,0 +1,158 @@
+package carfile
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Version is the library and CLI semantic version.
+const Version = "0.2.0"
+
+// OutputFormat selects the representation written by ExtractFile or Export.
+type OutputFormat string
+
+const (
+	// FormatResources recovers every logical resource into ordinary folders.
+	FormatResources OutputFormat = "resources"
+	// FormatXCAssets recreates a compilable Assets.xcassets directory.
+	FormatXCAssets OutputFormat = "xcassets"
+	// FormatRaw writes physical rendition payloads without decoding them.
+	FormatRaw OutputFormat = "raw"
+	// FormatPNG decodes physical bitmap payloads as PNG files, including atlases.
+	FormatPNG OutputFormat = "png"
+	// FormatJSON writes the parsed catalog metadata as JSON.
+	FormatJSON OutputFormat = "json"
+)
+
+// ExtractOptions controls high-level file extraction. An empty Format means
+// FormatResources. ExtractFile also derives OutputDirectory when it is empty.
+type ExtractOptions struct {
+	OutputDirectory string
+	Format          OutputFormat
+}
+
+// ExtractResult is the format-independent summary returned to library and CLI
+// callers. Detailed per-file results are stored in each output manifest.
+type ExtractResult struct {
+	Format          OutputFormat `json:"format"`
+	OutputDirectory string       `json:"output_directory"`
+	Written         int          `json:"written"`
+	Skipped         int          `json:"skipped,omitempty"`
+	Failed          int          `json:"failed,omitempty"`
+}
+
+// ExtractFile opens a compiled asset catalog and exports it according to
+// options. With zero-value options it recovers all logical resources beside
+// the input file in a <name>-extracted directory.
+func ExtractFile(path string, options ExtractOptions) (ExtractResult, error) {
+	if options.OutputDirectory == "" {
+		options.OutputDirectory = DefaultOutputDirectory(path)
+	}
+	catalog, err := Open(path)
+	if err != nil {
+		return ExtractResult{}, err
+	}
+	return catalog.Export(options)
+}
+
+// Export writes an already parsed catalog using one of the supported formats.
+func (c *Catalog) Export(options ExtractOptions) (ExtractResult, error) {
+	format := options.Format
+	if format == "" {
+		format = FormatResources
+	}
+	if _, err := ParseOutputFormat(string(format)); err != nil {
+		return ExtractResult{}, err
+	}
+	if options.OutputDirectory == "" {
+		return ExtractResult{}, fmt.Errorf("output directory is required when exporting a parsed Catalog")
+	}
+
+	summary := ExtractResult{Format: format}
+	switch format {
+	case FormatResources:
+		result, err := c.ExportResources(options.OutputDirectory)
+		if err != nil {
+			return summary, err
+		}
+		summary.OutputDirectory = result.Directory
+		summary.Written, summary.Failed = result.Written, result.Failed
+
+	case FormatXCAssets:
+		result, err := c.ExportXCAssets(options.OutputDirectory)
+		if err != nil {
+			return summary, err
+		}
+		summary.OutputDirectory = result.Directory
+		summary.Written, summary.Failed = result.Written, result.Failed
+
+	case FormatRaw:
+		result, err := c.ExportRaw(options.OutputDirectory)
+		if err != nil {
+			return summary, err
+		}
+		summary.OutputDirectory = result.Directory
+		summary.Written, summary.Skipped = result.Written, result.Skipped
+
+	case FormatPNG:
+		result, err := c.ExportImages(options.OutputDirectory)
+		if err != nil {
+			return summary, err
+		}
+		summary.OutputDirectory = result.Directory
+		summary.Written, summary.Failed = result.Written, result.Failed
+
+	case FormatJSON:
+		absolute, err := filepath.Abs(options.OutputDirectory)
+		if err != nil {
+			return summary, err
+		}
+		if err := os.MkdirAll(absolute, 0o755); err != nil {
+			return summary, fmt.Errorf("create JSON output directory: %w", err)
+		}
+		data, err := json.MarshalIndent(c, "", "  ")
+		if err != nil {
+			return summary, err
+		}
+		data = append(data, '\n')
+		if err := os.WriteFile(filepath.Join(absolute, "catalog.json"), data, 0o644); err != nil {
+			return summary, fmt.Errorf("write catalog.json: %w", err)
+		}
+		summary.OutputDirectory = absolute
+		summary.Written = 1
+	}
+	return summary, nil
+}
+
+// ParseOutputFormat validates a user-facing format name and accepts a few
+// convenient aliases.
+func ParseOutputFormat(value string) (OutputFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "resources", "resource", "files", "all":
+		return FormatResources, nil
+	case "xcassets", "xcasset":
+		return FormatXCAssets, nil
+	case "raw":
+		return FormatRaw, nil
+	case "png", "images", "image":
+		return FormatPNG, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return "", fmt.Errorf("unsupported output format %q (want resources, xcassets, raw, png, or json)", value)
+	}
+}
+
+// DefaultOutputDirectory returns the zero-configuration extraction directory
+// used by the CLI and ExtractFile.
+func DefaultOutputDirectory(inputPath string) string {
+	directory := filepath.Dir(inputPath)
+	base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
+	if base == "" {
+		base = "Assets"
+	}
+	return filepath.Join(directory, base+"-extracted")
+}
