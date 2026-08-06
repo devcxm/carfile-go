@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	carfile "carfile-go"
+	carfile "github.com/devcxm/carfile-go"
 )
 
 func TestVersion(t *testing.T) {

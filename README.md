@@ -103,7 +103,7 @@ package main
 import (
     "log"
 
-    carfile "carfile-go"
+    carfile "github.com/devcxm/carfile-go"
 )
 
 func main() {
@@ -137,14 +137,12 @@ Individual codecs are independently importable:
 
 ```go
 import (
-    "carfile-go/codec/deepmap2"
-    "carfile-go/codec/kcbc"
-    "carfile-go/codec/lzfse"
-    "carfile-go/codec/lzvn"
+    "github.com/devcxm/carfile-go/codec/deepmap2"
+    "github.com/devcxm/carfile-go/codec/kcbc"
+    "github.com/devcxm/carfile-go/codec/lzfse"
+    "github.com/devcxm/carfile-go/codec/lzvn"
 )
 ```
-
-Before publishing the project, replace the temporary `carfile-go` module path in `go.mod` with the final repository URL. The package structure and public interfaces do not otherwise need to change.
 
 ## Supported formats
 

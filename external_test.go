@@ -3,8 +3,8 @@ package carfile_test
 import (
 	"fmt"
 
-	carfile "carfile-go"
-	"carfile-go/codec/lzfse"
+	carfile "github.com/devcxm/carfile-go"
+	"github.com/devcxm/carfile-go/codec/lzfse"
 )
 
 func ExampleExtractOptions() {

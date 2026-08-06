@@ -2,9 +2,10 @@
 package kcbc
 
 import (
-	"carfile-go/codec/lzfse"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/devcxm/carfile-go/codec/lzfse"
 )
 
 // Decode expands a sequence of independently compressed horizontal image

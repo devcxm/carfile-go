@@ -2,10 +2,11 @@
 package deepmap2
 
 import (
-	"carfile-go/codec/lzfse"
-	"carfile-go/codec/lzvn"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/devcxm/carfile-go/codec/lzfse"
+	"github.com/devcxm/carfile-go/codec/lzvn"
 )
 
 const (

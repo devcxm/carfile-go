@@ -1,10 +1,10 @@
 package carfile
 
 import (
-	"carfile-go/codec/deepmap2"
-	"carfile-go/codec/kcbc"
-	"carfile-go/codec/lzfse"
-	"carfile-go/codec/lzvn"
+	"github.com/devcxm/carfile-go/codec/deepmap2"
+	"github.com/devcxm/carfile-go/codec/kcbc"
+	"github.com/devcxm/carfile-go/codec/lzfse"
+	"github.com/devcxm/carfile-go/codec/lzvn"
 )
 
 // Deepmap2Bitmap is kept as a root-package alias for callers that do not need

@@ -1,5 +1,6 @@
 # Go build and test output
 /carfile
+/dist/
 *.test
 coverage.out
 coverage.html

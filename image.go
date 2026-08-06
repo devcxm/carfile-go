@@ -1,11 +1,12 @@
 package carfile
 
 import (
-	"carfile-go/codec/deepmap2"
-	"carfile-go/codec/kcbc"
-	"carfile-go/codec/lzfse"
 	"fmt"
 	"image"
+
+	"github.com/devcxm/carfile-go/codec/deepmap2"
+	"github.com/devcxm/carfile-go/codec/kcbc"
+	"github.com/devcxm/carfile-go/codec/lzfse"
 )
 
 // DecodeRenditionImage converts a supported compressed pixel rendition into a

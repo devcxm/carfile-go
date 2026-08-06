@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	carfile "carfile-go"
+	carfile "github.com/devcxm/carfile-go"
 )
 
 func main() {

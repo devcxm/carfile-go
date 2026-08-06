@@ -2,10 +2,11 @@
 package lzfse
 
 import (
-	"carfile-go/codec/lzvn"
 	"encoding/binary"
 	"fmt"
 	"math/bits"
+
+	"github.com/devcxm/carfile-go/codec/lzvn"
 )
 
 const (
