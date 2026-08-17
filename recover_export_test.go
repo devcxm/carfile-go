@@ -3,8 +3,40 @@ package carfile
 import (
 	"image"
 	"image/color"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestExportResourcesRestoresSingleDataAssetFileName(t *testing.T) {
+	data := []byte(`{"continents":[]}`)
+	payload := append([]byte("DWAR\x00\x00\x00\x00\x11\x00\x00\x00"), data...)
+	catalog := Catalog{Renditions: []Rendition{{
+		AssetName: "SupportCountryList.json",
+		CSI: CSI{
+			Layout:     1000,
+			LayoutName: "Data",
+			Name:       "CoreStructuredImage",
+			Payload:    Payload{Tag: "RAWD", DeclaredLength: uint32(len(data)), Data: payload},
+		},
+	}}}
+
+	directory := t.TempDir()
+	result, err := catalog.ExportResources(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(filepath.Join(directory, "SupportCountryList.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != string(data) {
+		t.Fatalf("data = %q, want %q", written, data)
+	}
+	if len(result.Files) != 1 || result.Files[0].File != "SupportCountryList.json" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
 
 func TestKeyMatchesTokens(t *testing.T) {
 	key := []AttributeValue{

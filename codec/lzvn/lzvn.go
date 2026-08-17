@@ -9,6 +9,20 @@ import (
 // Decode expands a raw LZVN instruction stream to exactly outputSize
 // bytes. Raw streams end with the eight-byte LZVN end marker.
 func Decode(src []byte, outputSize int) ([]byte, error) {
+	dst, err := DecodeUpTo(src, outputSize)
+	if err != nil {
+		return nil, err
+	}
+	if len(dst) != outputSize {
+		return nil, fmt.Errorf("LZVN decoded %d bytes, expected %d", len(dst), outputSize)
+	}
+	return dst, nil
+}
+
+// DecodeUpTo expands a raw LZVN instruction stream whose exact output size is
+// not recorded by the container. It rejects streams that exceed outputLimit.
+func DecodeUpTo(src []byte, outputLimit int) ([]byte, error) {
+	outputSize := outputLimit
 	if outputSize < 0 {
 		return nil, fmt.Errorf("negative LZVN output size %d", outputSize)
 	}
@@ -28,9 +42,6 @@ func Decode(src []byte, outputSize int) ([]byte, error) {
 			offset += 8
 			if offset != len(src) {
 				return nil, fmt.Errorf("LZVN stream has %d trailing bytes", len(src)-offset)
-			}
-			if len(dst) != outputSize {
-				return nil, fmt.Errorf("LZVN decoded %d bytes, expected %d", len(dst), outputSize)
 			}
 			return dst, nil
 

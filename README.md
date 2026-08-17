@@ -1,8 +1,19 @@
 # carfile-go
 
-`carfile-go` is a pure-Go library and CLI for parsing and extracting Apple's compiled Asset Catalog (`Assets.car`) format. It uses only the Go standard library and does not call CoreUI, `assetutil`, cgo, or third-party codecs at runtime.
+`carfile-go` is a Go library and CLI for parsing and extracting Apple's compiled Asset Catalog (`Assets.car`) format. Most formats are decoded in pure Go with no third-party codecs. Native decoding is available on Darwin, with portable Go fallbacks for supported encodings.
 
 ## CLI
+
+Download the archive for your platform and architecture from the GitHub
+Release. Darwin, Linux, and Windows packages are published for both amd64 and
+arm64. Each release includes a checksum manifest and signed GitHub build
+provenance. Verify both before running the binary:
+
+```sh
+grep ' carfile_0.5.3_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
+gh attestation verify carfile_0.5.3_darwin_arm64.tar.gz \
+  --repo devcxm/carfile-go
+```
 
 Build the command:
 
@@ -47,7 +58,7 @@ carfile -f json -o metadata Assets.car
 
 | Format | Output |
 | --- | --- |
-| `resources` | All logical resources, grouped by asset name. Packed atlas entries are cropped into individual files. This is the default. |
+| `resources` | All logical resources. Single Data resources keep their original file name; rendition families are grouped by asset name. Packed atlas entries are cropped into individual files. This is the default. |
 | `xcassets` | A flat, compilable `Assets.xcassets` with generated `Contents.json` files. |
 | `raw` | Physical CAR payloads with wrappers removed where possible. Compressed data stays compressed. |
 | `png` | Every directly stored compressed bitmap as PNG, including packed atlas images. |
@@ -137,10 +148,13 @@ Individual codecs are independently importable:
 
 ```go
 import (
-    "github.com/devcxm/carfile-go/codec/deepmap2"
-    "github.com/devcxm/carfile-go/codec/kcbc"
-    "github.com/devcxm/carfile-go/codec/lzfse"
-    "github.com/devcxm/carfile-go/codec/lzvn"
+	"github.com/devcxm/carfile-go/codec/deepmap"
+	"github.com/devcxm/carfile-go/codec/deepmap2"
+	"github.com/devcxm/carfile-go/codec/kcbc"
+	"github.com/devcxm/carfile-go/codec/lzfse"
+	"github.com/devcxm/carfile-go/codec/lzvn"
+	"github.com/devcxm/carfile-go/codec/palette"
+	"github.com/devcxm/carfile-go/codec/rle"
 )
 ```
 
@@ -158,18 +172,13 @@ The decoder supports:
 - LZFSE `bvx2`, raw `bvx-`, and embedded LZVN `bvxn` streams;
 - raw LZVN instruction streams;
 - KCBC horizontal bitmap chunks and row-padding removal;
-- Deepmap2 default, lossless, and palette encodings;
-- ARGB/BGRA and GA8 pixels;
+- row-oriented RLE and quantized `palette-img` bitmaps;
+- legacy Deepmap and Deepmap2 default, lossless, and palette encodings;
+- ARGB/BGRA, GA8, and wide-gamut RGBW pixels;
 - packed-image links, including lower-left coordinate conversion and atlas cropping.
 
+On Darwin with cgo enabled, supported Deepmap variants can use native decoding.
+Portable decoding is used on other platforms and whenever native decoding is
+unavailable.
+
 Original RAWD files such as SVG and JPEG are copied byte-for-byte. Compiled bitmaps are re-encoded as PNG; their original PNG compression, ancillary metadata, and source group hierarchy are not present in the CAR and cannot be reconstructed exactly.
-
-## References and acknowledgements
-
-This project benefited from the following public research and reference implementations:
-
-- [Timac — Reverse engineering the `.car` file format](https://blog.timac.org/2018/1018-reverse-engineering-the-car-file-format/), the foundational walkthrough of BOM and compiled Asset Catalog structures.
-- [DBG.RE — A Deep Dive into Apple's `.car` File Format](https://dbg.re/posts/car-file-format/), especially the CSI, internal-link, compression, and KCBC format analysis.
-- [Apple — LZFSE reference implementation](https://github.com/lzfse/lzfse), used as the authoritative algorithm reference for the pure-Go LZFSE and LZVN decoders.
-
-Many thanks to the authors and maintainers for publishing their research and source code. `carfile-go` is an independent pure-Go implementation and does not copy or invoke Apple's private CoreUI framework.

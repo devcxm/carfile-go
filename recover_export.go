@@ -73,8 +73,9 @@ func (c *Catalog) ExportRecovered(directory string) (RecoveryResult, error) {
 	return c.ExportXCAssets(directory)
 }
 
-// ExportResources recovers all logical assets into ordinary directories,
-// grouped by asset name without generating Asset Catalog metadata.
+// ExportResources recovers all logical assets without generating Asset Catalog
+// metadata. Single Data resources keep their original file name; rendition
+// families are grouped by asset name.
 func (c *Catalog) ExportResources(directory string) (RecoveryResult, error) {
 	return c.exportLogicalAssets(directory, false, renditionMatcher{}, nil)
 }
@@ -172,11 +173,6 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 				createdCatalogGroups[groupName] = true
 			}
 		}
-		setDirectory := filepath.Join(assetsDirectory, relativeSet)
-		if err := os.MkdirAll(setDirectory, 0o755); err != nil {
-			return result, fmt.Errorf("create %s: %w", setName, err)
-		}
-
 		candidates := make([]recoveryCandidate, 0, len(groups[assetName]))
 		for _, candidate := range groups[assetName] {
 			candidates = append(candidates, candidate)
@@ -184,6 +180,16 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 		sort.Slice(candidates, func(i, j int) bool {
 			return candidates[i].index < candidates[j].index
 		})
+		setDirectory := filepath.Join(assetsDirectory, relativeSet)
+		restoreSingleDataFile := !xcassets && len(candidates) == 1 &&
+			candidates[0].rendition.CSI.Layout == 1000 &&
+			candidates[0].rendition.CSI.Payload.Tag == "RAWD" &&
+			filepath.Ext(setName) != "" && strings.ToLower(setName) != "manifest.json"
+		if !restoreSingleDataFile {
+			if err := os.MkdirAll(setDirectory, 0o755); err != nil {
+				return result, fmt.Errorf("create %s: %w", setName, err)
+			}
+		}
 		contents := recoveredContents{Info: recoveredInfo{Version: 1, Author: "carfile-go"}}
 		for _, candidate := range candidates {
 			r := candidate.rendition
@@ -192,6 +198,9 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			name := recoveredPathName(r.CSI.Name, fmt.Sprintf("rendition-%d.png", candidate.index))
 			record := RecoveryRecord{Index: candidate.index, AssetName: assetName, Name: r.CSI.Name}
 			path := filepath.Join(setDirectory, name)
+			if restoreSingleDataFile {
+				path = setDirectory
+			}
 
 			switch {
 			case r.CSI.Payload.Tag == "RAWD":

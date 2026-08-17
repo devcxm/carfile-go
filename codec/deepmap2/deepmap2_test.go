@@ -24,6 +24,28 @@ func TestDecodeDeepmap2Palette(t *testing.T) {
 	}
 }
 
+func TestDecodeDeepmap2PaletteWithSeparateAlpha(t *testing.T) {
+	planes := rawLZFSEStream([]byte{255, 128, 0, 1})
+	payload := []byte{
+		10, 20, 30, 0,
+		40, 50, 60, 0,
+	}
+	length := make([]byte, 4)
+	binary.LittleEndian.PutUint32(length, uint32(len(planes)))
+	payload = append(payload, length...)
+	payload = append(payload, planes...)
+	src := deepmap2Fixture(deepmap2Palette, 2, 1, 4, uint32(2|(3<<16)), payload)
+
+	got, err := Decode(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{10, 20, 30, 255, 40, 50, 60, 128}
+	if string(got.Pixels) != string(want) {
+		t.Fatalf("got %v, want %v", got.Pixels, want)
+	}
+}
+
 func TestDecodeDeepmap2Lossless(t *testing.T) {
 	pixels := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	compressed := rawLZFSEStream(pixels)
@@ -54,6 +76,29 @@ func TestDecodeDeepmap2Default(t *testing.T) {
 	want := []byte{10, 10, 10, 255, 20, 20, 20, 255}
 	if string(got.Pixels) != string(want) {
 		t.Fatalf("got %v, want %v", got.Pixels, want)
+	}
+}
+
+func TestDecodeDeepmap2DefaultRGBW(t *testing.T) {
+	intermediate := []byte{
+		255, 255, // alpha
+		0,                // no row predictor
+		2, 1, 0, 2, 1, 0, // high-byte plane
+		0x10, 0xfd, 0x14, 0x10, 0xfd, 0x14, // low/sign-byte plane: Y=264, Co=-254, Cg=10
+		0, // 16-byte alignment
+	}
+	compressed := rawLZFSEStream(intermediate)
+	src := deepmap2Fixture(deepmap2Default, 2, 1, 20, uint32(len(compressed)), compressed)
+	got, err := decodePortable(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []uint16{9922, 5352, 0, 10000}
+	for component, value := range want {
+		offset := component * 2
+		if actual := binary.LittleEndian.Uint16(got.Pixels[offset : offset+2]); actual != value {
+			t.Fatalf("component %d is %d, want %d", component, actual, value)
+		}
 	}
 }
 

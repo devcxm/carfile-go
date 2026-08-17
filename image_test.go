@@ -16,6 +16,22 @@ func TestImageFromBGRA(t *testing.T) {
 	}
 }
 
+func TestImageFromWideBGRA(t *testing.T) {
+	pixels := make([]byte, 8)
+	binary.LittleEndian.PutUint16(pixels[0:2], 2500)
+	binary.LittleEndian.PutUint16(pixels[2:4], 5000)
+	binary.LittleEndian.PutUint16(pixels[4:6], 10000)
+	binary.LittleEndian.PutUint16(pixels[6:8], 10000)
+	img, err := imageFromPixels(pixels, 1, 1, "RGBW", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, g, b, a := img.At(0, 0).RGBA()
+	if r>>8 != 255 || g>>8 != 128 || b>>8 != 64 || a>>8 != 255 {
+		t.Fatalf("got RGBA %d %d %d %d", r>>8, g>>8, b>>8, a>>8)
+	}
+}
+
 func TestDecodeDeepmap2UsesBGRAByteOrder(t *testing.T) {
 	stream := make([]byte, 8)
 	copy(stream[0:4], "bvx-")

@@ -1,16 +1,21 @@
 package carfile
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 
+	"github.com/devcxm/carfile-go/codec/deepmap"
 	"github.com/devcxm/carfile-go/codec/deepmap2"
 	"github.com/devcxm/carfile-go/codec/kcbc"
 	"github.com/devcxm/carfile-go/codec/lzfse"
+	"github.com/devcxm/carfile-go/codec/palette"
+	"github.com/devcxm/carfile-go/codec/rle"
 )
 
 // DecodeRenditionImage converts a supported compressed pixel rendition into a
-// standard-library image. No CoreUI APIs or external codecs are used.
+// standard-library image. On Darwin with cgo enabled, Deepmap variants use
+// Accelerate's CoreUI-compatible vImage decoders; other formats are decoded in Go.
 func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	csi := rendition.CSI
 	if csi.Payload.Tag != "CELM" || len(csi.Payload.Data) < 16 || csi.Payload.CompressionType == nil {
@@ -18,18 +23,29 @@ func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	}
 	data := csi.Payload.Data[16:]
 	switch *csi.Payload.CompressionType {
+	case 1:
+		bytesPerPixel, err := pixelStorageBytes(csi.PixelFormat)
+		if err != nil {
+			return nil, err
+		}
+		pixels, err := rle.Decode(data, csi.Width, csi.Height, bytesPerPixel)
+		if err != nil {
+			return nil, err
+		}
+		return imageFromPixels(pixels, csi.Width, csi.Height, csi.PixelFormat, false)
+
 	case 4:
-		components, err := pixelComponents(csi.PixelFormat)
+		bytesPerPixel, err := pixelStorageBytes(csi.PixelFormat)
 		if err != nil {
 			return nil, err
 		}
 		var pixels []byte
 		if len(data) >= 4 && string(data[:4]) == "KCBC" {
-			pixels, err = kcbc.Decode(data, csi.Width, csi.Height, components)
+			pixels, err = kcbc.Decode(data, csi.Width, csi.Height, bytesPerPixel)
 		} else {
 			pixels, err = lzfse.Decode(data)
 			if err == nil {
-				pixels, err = stripBitmapRowPadding(pixels, csi.Width, csi.Height, components)
+				pixels, err = stripBitmapRowPadding(pixels, csi.Width, csi.Height, bytesPerPixel)
 			}
 		}
 		if err != nil {
@@ -37,20 +53,36 @@ func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 		}
 		return imageFromPixels(pixels, csi.Width, csi.Height, csi.PixelFormat, false)
 
+	case 8:
+		pixels, err := palette.Decode(data, csi.Width, csi.Height, csi.PixelFormat)
+		if err != nil {
+			return nil, err
+		}
+		return imageFromPixels(pixels, csi.Width, csi.Height, csi.PixelFormat, false)
+
+	case 10:
+		bitmap, err := deepmap.Decode(data, csi.Width, csi.Height)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateDeepmapPixelFormat(bitmap, csi.PixelFormat); err != nil {
+			return nil, err
+		}
+		return imageFromPixels(bitmap.Pixels, csi.Width, csi.Height, csi.PixelFormat, false)
+
 	case 11:
-		bitmap, err := deepmap2.Decode(data)
+		if csi.Width > 0xffff || csi.Height > 0xffff {
+			return nil, fmt.Errorf("dmp2 geometry %dx%d exceeds format limits", csi.Width, csi.Height)
+		}
+		bitmap, err := deepmap2.DecodeWithGeometry(data, uint16(csi.Width), uint16(csi.Height))
 		if err != nil {
 			return nil, err
 		}
 		if uint32(bitmap.Width) != csi.Width || uint32(bitmap.Height) != csi.Height {
 			return nil, fmt.Errorf("dmp2 geometry %dx%d differs from CSI geometry %dx%d", bitmap.Width, bitmap.Height, csi.Width, csi.Height)
 		}
-		expectedComponents, err := pixelComponents(csi.PixelFormat)
-		if err != nil {
+		if err := validateDeepmapPixelFormat(bitmap, csi.PixelFormat); err != nil {
 			return nil, err
-		}
-		if int(bitmap.Components) != expectedComponents {
-			return nil, fmt.Errorf("dmp2 has %d components, %s needs %d", bitmap.Components, csi.PixelFormat, expectedComponents)
 		}
 		// Deepmap2 reconstructs the byte layout used by CoreUI (BGRA for
 		// the canonical ARGB pixel format), just like the lossless path.
@@ -61,15 +93,35 @@ func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	}
 }
 
-func pixelComponents(format string) (int, error) {
+func pixelStorageBytes(format string) (int, error) {
 	switch format {
 	case "ARGB":
 		return 4, nil
 	case "GA8 ":
 		return 2, nil
+	case "RGBW":
+		return 8, nil
 	default:
 		return 0, fmt.Errorf("unsupported pixel format %q", format)
 	}
+}
+
+func validateDeepmapPixelFormat(bitmap deepmap2.Bitmap, format string) error {
+	want := uint8(0)
+	switch format {
+	case "ARGB":
+		want = 4
+	case "GA8 ":
+		want = 2
+	case "RGBW":
+		want = 20
+	default:
+		return fmt.Errorf("unsupported pixel format %q", format)
+	}
+	if bitmap.PixelFormat != want {
+		return fmt.Errorf("deepmap pixel format %d differs from CSI pixel format %s", bitmap.PixelFormat, format)
+	}
+	return nil
 }
 
 func stripBitmapRowPadding(pixels []byte, width, height uint32, components int) ([]byte, error) {
@@ -100,11 +152,11 @@ func stripBitmapRowPadding(pixels []byte, width, height uint32, components int) 
 }
 
 func imageFromPixels(pixels []byte, width, height uint32, format string, rgbaOrder bool) (image.Image, error) {
-	components, err := pixelComponents(format)
+	bytesPerPixel, err := pixelStorageBytes(format)
 	if err != nil {
 		return nil, err
 	}
-	expected := uint64(width) * uint64(height) * uint64(components)
+	expected := uint64(width) * uint64(height) * uint64(bytesPerPixel)
 	if uint64(len(pixels)) != expected {
 		return nil, fmt.Errorf("%s bitmap has %d bytes, expected %d", format, len(pixels), expected)
 	}
@@ -130,6 +182,24 @@ func imageFromPixels(pixels []byte, width, height uint32, format string, rgbaOrd
 			result.Pix[dest+2] = gray
 			result.Pix[dest+3] = alpha
 		}
+	case "RGBW":
+		for source, dest := 0, 0; source < len(pixels); source, dest = source+8, dest+4 {
+			blue := wideToByte(binary.LittleEndian.Uint16(pixels[source : source+2]))
+			green := wideToByte(binary.LittleEndian.Uint16(pixels[source+2 : source+4]))
+			red := wideToByte(binary.LittleEndian.Uint16(pixels[source+4 : source+6]))
+			alpha := wideToByte(binary.LittleEndian.Uint16(pixels[source+6 : source+8]))
+			result.Pix[dest+0] = red
+			result.Pix[dest+1] = green
+			result.Pix[dest+2] = blue
+			result.Pix[dest+3] = alpha
+		}
 	}
 	return result, nil
+}
+
+func wideToByte(value uint16) byte {
+	if value >= 10000 {
+		return 255
+	}
+	return byte((uint32(value)*255 + 5000) / 10000)
 }

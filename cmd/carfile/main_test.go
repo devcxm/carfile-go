@@ -13,7 +13,7 @@ func TestVersion(t *testing.T) {
 	if code := run([]string{"--version"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
-	if !strings.HasPrefix(stdout.String(), "carfile ") {
+	if stdout.String() != "carfile "+carfile.Version+"\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

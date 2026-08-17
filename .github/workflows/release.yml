@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+            cgo: "1"
+            extension: ""
+            archive: tar.gz
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+            cgo: "1"
+            extension: ""
+            archive: tar.gz
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04
+            cgo: "0"
+            extension: ""
+            archive: tar.gz
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+            cgo: "0"
+            extension: ""
+            archive: tar.gz
+          - os: windows
+            arch: arm64
+            runner: ubuntu-24.04
+            cgo: "0"
+            extension: .exe
+            archive: zip
+          - os: windows
+            arch: amd64
+            runner: ubuntu-24.04
+            cgo: "0"
+            extension: .exe
+            archive: zip
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify tag and source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          source_version="$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' extract.go)"
+          test -n "$source_version"
+          test "$GITHUB_REF_NAME" = "v$source_version"
+          test "$tag_version" = "$source_version"
+
+      - name: Verify native decoder availability
+        if: matrix.os == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOHOSTARCH)" = "${{ matrix.arch }}"
+          python3 - <<'PY'
+          import ctypes
+
+          accelerate = ctypes.CDLL(
+              "/System/Library/Frameworks/Accelerate.framework/Accelerate"
+          )
+          getattr(accelerate, "vImageDeepmapDecodeStreamCreate")
+          getattr(accelerate, "vImageDeepmapDecodeStreamProcess")
+          getattr(accelerate, "vImageDeepmapDecodeStreamRelease")
+          getattr(accelerate, "vImageDeepmap2Decode")
+          PY
+
+      - name: Test
+        if: matrix.os == 'darwin' || (matrix.os == 'linux' && matrix.arch == 'amd64')
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go test ./...
+
+      - name: Build and package
+        id: package
+        shell: bash
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          package="carfile_${version}_${GOOS}_${GOARCH}"
+          binary="dist/$package/carfile${{ matrix.extension }}"
+          archive="$package.${{ matrix.archive }}"
+          mkdir -p "dist/$package"
+          go build -trimpath -buildvcs=true -ldflags="-s -w" \
+            -o "$binary" ./cmd/carfile
+          go version -m "$binary"
+          if test "$GOOS/$GOARCH" = "$(go env GOHOSTOS)/$(go env GOHOSTARCH)"; then
+            test "$("$binary" --version)" = "carfile $version"
+          fi
+          cp LICENSE README.md "dist/$package/"
+          if test "${{ matrix.archive }}" = "zip"; then
+            (cd dist && zip -qr "$archive" "$package")
+          else
+            tar -C dist -czf "dist/$archive" "$package"
+          fi
+          echo "archive=dist/$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find dist -maxdepth 1 -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          test "${#archives[@]}" -eq 6
+          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
+
+      - name: Attest checksum manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/checksums.txt
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes_file=".github/release-notes/$GITHUB_REF_NAME.md"
+          test -s "$notes_file"
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.tar.gz \
+            dist/*.zip \
+            dist/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --notes-file "$notes_file" \
+            --title "carfile-go $GITHUB_REF_NAME"
