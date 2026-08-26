@@ -9,7 +9,7 @@ import (
 )
 
 // Version is the library and CLI semantic version.
-const Version = "0.5.3"
+const Version = "0.6.0"
 
 // OutputFormat selects the representation written by ExtractFile or Export.
 type OutputFormat string

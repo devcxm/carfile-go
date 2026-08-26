@@ -19,6 +19,8 @@ jobs:
     name: Build ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -26,37 +28,31 @@ jobs:
           - os: darwin
             arch: arm64
             runner: macos-15
-            cgo: "1"
             extension: ""
             archive: tar.gz
           - os: darwin
             arch: amd64
             runner: macos-15-intel
-            cgo: "1"
             extension: ""
             archive: tar.gz
           - os: linux
             arch: arm64
             runner: ubuntu-24.04
-            cgo: "0"
             extension: ""
             archive: tar.gz
           - os: linux
             arch: amd64
             runner: ubuntu-24.04
-            cgo: "0"
             extension: ""
             archive: tar.gz
           - os: windows
             arch: arm64
             runner: ubuntu-24.04
-            cgo: "0"
             extension: .exe
             archive: zip
           - os: windows
             arch: amd64
             runner: ubuntu-24.04
-            cgo: "0"
             extension: .exe
             archive: zip
 
@@ -83,35 +79,14 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$source_version"
           test "$tag_version" = "$source_version"
 
-      - name: Verify native decoder availability
-        if: matrix.os == 'darwin'
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(go env GOHOSTARCH)" = "${{ matrix.arch }}"
-          python3 - <<'PY'
-          import ctypes
-
-          accelerate = ctypes.CDLL(
-              "/System/Library/Frameworks/Accelerate.framework/Accelerate"
-          )
-          getattr(accelerate, "vImageDeepmapDecodeStreamCreate")
-          getattr(accelerate, "vImageDeepmapDecodeStreamProcess")
-          getattr(accelerate, "vImageDeepmapDecodeStreamRelease")
-          getattr(accelerate, "vImageDeepmap2Decode")
-          PY
-
       - name: Test
         if: matrix.os == 'darwin' || (matrix.os == 'linux' && matrix.arch == 'amd64')
-        env:
-          CGO_ENABLED: ${{ matrix.cgo }}
         run: go test ./...
 
       - name: Build and package
         id: package
         shell: bash
         env:
-          CGO_ENABLED: ${{ matrix.cgo }}
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: |

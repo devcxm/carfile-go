@@ -108,9 +108,6 @@ func DecodePaletteData(palette, planesAndIndices []byte, width, height uint16, p
 // Decode decodes the data after a CELM wrapper. It supports the default,
 // lossless, and palette encodings emitted by current versions of actool.
 func Decode(src []byte) (Bitmap, error) {
-	if bitmap, native, err := decodeNative(src, 0, 0); native && err == nil {
-		return bitmap, nil
-	}
 	return decodePortable(src)
 }
 
@@ -232,21 +229,10 @@ func decodePortable(src []byte) (Bitmap, error) {
 	}
 }
 
-// DecodeWithGeometry decodes a Deepmap2 payload using the complete CSI output
-// geometry. Some chunked streams only record the first segment's height in the
-// inner dmp2 header, so callers that know the rendition dimensions should use
-// this entry point.
+// DecodeWithGeometry decodes a Deepmap2 payload. The geometry parameters are
+// retained for API compatibility; the portable decoder derives the effective
+// dimensions from the payload and its decoded segments.
 func DecodeWithGeometry(src []byte, width, height uint16) (Bitmap, error) {
-	if bitmap, native, nativeErr := decodeNative(src, width, height); native {
-		if nativeErr == nil {
-			return bitmap, nil
-		}
-		bitmap, err := Decode(src)
-		if err != nil {
-			return Bitmap{}, fmt.Errorf("native dmp2 decode: %v; portable decode: %w", nativeErr, err)
-		}
-		return bitmap, nil
-	}
 	return Decode(src)
 }
 

@@ -37,16 +37,9 @@ func Decode(src []byte, width, height uint32) (deepmap2.Bitmap, error) {
 			return result, fmt.Errorf("legacy deepmap KCBC chunk %d needs %d bytes", chunk, chunkBytes)
 		}
 		legacy := src[start:int(end)]
-		bitmap, native, nativeErr := decodeNativeChunk(legacy[16:], uint16(width), uint16(chunkRows))
-		if !native || nativeErr != nil {
-			portable, err := decodePortableChunk(legacy, uint16(width), uint16(chunkRows))
-			if err != nil {
-				if nativeErr != nil {
-					return result, fmt.Errorf("legacy deepmap KCBC chunk %d: native decode: %v; portable decode: %w", chunk, nativeErr, err)
-				}
-				return result, fmt.Errorf("legacy deepmap KCBC chunk %d: %w", chunk, err)
-			}
-			bitmap = portable
+		bitmap, err := decodePortableChunk(legacy, uint16(width), uint16(chunkRows))
+		if err != nil {
+			return result, fmt.Errorf("legacy deepmap KCBC chunk %d: %w", chunk, err)
 		}
 		if uint32(bitmap.Width) != width || uint32(bitmap.Height) != chunkRows {
 			return result, fmt.Errorf("legacy deepmap KCBC chunk %d decoded as %dx%d", chunk, bitmap.Width, bitmap.Height)

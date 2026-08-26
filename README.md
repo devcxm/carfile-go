@@ -1,6 +1,6 @@
 # carfile-go
 
-`carfile-go` is a Go library and CLI for parsing and extracting Apple's compiled Asset Catalog (`Assets.car`) format. Most formats are decoded in pure Go with no third-party codecs. Native decoding is available on Darwin, with portable Go fallbacks for supported encodings.
+`carfile-go` is a pure Go library and CLI for parsing and extracting Apple's compiled Asset Catalog (`Assets.car`) format. It has no cgo or platform-specific runtime dependencies.
 
 ## CLI
 
@@ -10,8 +10,8 @@ arm64. Each release includes a checksum manifest and signed GitHub build
 provenance. Verify both before running the binary:
 
 ```sh
-grep ' carfile_0.5.3_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
-gh attestation verify carfile_0.5.3_darwin_arm64.tar.gz \
+grep ' carfile_0.6.0_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
+gh attestation verify carfile_0.6.0_darwin_arm64.tar.gz \
   --repo devcxm/carfile-go
 ```
 
@@ -176,9 +176,5 @@ The decoder supports:
 - legacy Deepmap and Deepmap2 default, lossless, and palette encodings;
 - ARGB/BGRA, GA8, and wide-gamut RGBW pixels;
 - packed-image links, including lower-left coordinate conversion and atlas cropping.
-
-On Darwin with cgo enabled, supported Deepmap variants can use native decoding.
-Portable decoding is used on other platforms and whenever native decoding is
-unavailable.
 
 Original RAWD files such as SVG and JPEG are copied byte-for-byte. Compiled bitmaps are re-encoded as PNG; their original PNG compression, ancillary metadata, and source group hierarchy are not present in the CAR and cannot be reconstructed exactly.

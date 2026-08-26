@@ -14,8 +14,7 @@ import (
 )
 
 // DecodeRenditionImage converts a supported compressed pixel rendition into a
-// standard-library image. On Darwin with cgo enabled, Deepmap variants use
-// Accelerate's CoreUI-compatible vImage decoders; other formats are decoded in Go.
+// standard-library image using portable Go decoders.
 func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	csi := rendition.CSI
 	if csi.Payload.Tag != "CELM" || len(csi.Payload.Data) < 16 || csi.Payload.CompressionType == nil {
