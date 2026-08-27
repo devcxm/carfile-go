@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestDecodeDeepmap2Raw(t *testing.T) {
+	src := make([]byte, 28)
+	binary.LittleEndian.PutUint32(src[0:4], 1)
+	binary.LittleEndian.PutUint32(src[4:8], 2)
+	binary.LittleEndian.PutUint64(src[8:16], 14)
+	copy(src[16:20], "dmp2")
+	src[20] = 1
+	src[21] = 1
+	src[22] = 10
+	src[23] = 2
+	binary.LittleEndian.PutUint16(src[24:26], 1)
+	binary.LittleEndian.PutUint16(src[26:28], 1)
+	src = append(src, 0, 0)
+
+	got, err := Decode(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Width != 1 || got.Height != 1 || got.PixelFormat != 2 || got.Method != 1 || string(got.Pixels) != "\x00\x00" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 func TestDecodeDeepmap2Palette(t *testing.T) {
 	indices := []byte{0xe4, 0, 1, 1, 0, 0x06, 0, 0, 0, 0, 0, 0, 0}
 	payload := []byte{10, 20, 30, 40, 50, 60, 70, 80}

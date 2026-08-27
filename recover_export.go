@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/devcxm/carfile-go/codec/lzfse"
 )
 
 type RecoveryResult struct {
@@ -42,9 +44,41 @@ type recoveryCandidate struct {
 }
 
 type recoveredContents struct {
-	Images     []recoveredImageEntry `json:"images"`
+	Images     []recoveredImageEntry `json:"images,omitempty"`
+	Colors     []recoveredColorEntry `json:"colors,omitempty"`
 	Info       recoveredInfo         `json:"info"`
 	Properties map[string]bool       `json:"properties,omitempty"`
+}
+
+type recoveredColorEntry struct {
+	Appearances []recoveredAppearance `json:"appearances,omitempty"`
+	Idiom       string                `json:"idiom"`
+	Color       recoveredColorValue   `json:"color"`
+}
+
+type recoveredAppearance struct {
+	Appearance string `json:"appearance"`
+	Value      string `json:"value"`
+}
+
+type recoveredColorValue struct {
+	ColorSpace string                   `json:"color-space"`
+	Components recoveredColorComponents `json:"components"`
+}
+
+type recoveredColorComponents struct {
+	Red   string `json:"red"`
+	Green string `json:"green"`
+	Blue  string `json:"blue"`
+	Alpha string `json:"alpha"`
+}
+
+type recoveredColorResource struct {
+	ColorSpaceID uint32    `json:"color_space_id"`
+	ColorSpace   string    `json:"color_space"`
+	Components   []float64 `json:"components"`
+	Appearance   string    `json:"appearance,omitempty"`
+	Idiom        string    `json:"idiom"`
 }
 
 type recoveredImageEntry struct {
@@ -120,13 +154,14 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			groups[rendition.AssetName] = byName
 		}
 		candidate := recoveryCandidate{index: index, rendition: rendition}
-		if previous, ok := byName[rendition.CSI.Name]; ok {
+		identity := recoveryCandidateIdentity(rendition)
+		if previous, ok := byName[identity]; ok {
 			result.Duplicates++
 			if recoveryCandidateScore(candidate) <= recoveryCandidateScore(previous) {
 				continue
 			}
 		}
-		byName[rendition.CSI.Name] = candidate
+		byName[identity] = candidate
 	}
 
 	assetNames := make([]string, 0, len(groups))
@@ -143,10 +178,19 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 	setNameCounts := make(map[string]int)
 	createdCatalogGroups := make(map[string]bool)
 	for _, assetName := range assetNames {
+		colorSet := true
+		for _, candidate := range groups[assetName] {
+			if candidate.rendition.CSI.Layout != 1009 {
+				colorSet = false
+				break
+			}
+		}
 		extension := ""
 		if xcassets {
 			extension = ".imageset"
-			if appIconSets[assetName] {
+			if colorSet {
+				extension = ".colorset"
+			} else if appIconSets[assetName] {
 				extension = ".appiconset"
 			}
 		}
@@ -196,6 +240,9 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			current++
 			reportProgress(progress, current, total, candidate.index, r)
 			name := recoveredPathName(r.CSI.Name, fmt.Sprintf("rendition-%d.png", candidate.index))
+			if colorSet {
+				name = recoveredColorFileName(r)
+			}
 			record := RecoveryRecord{Index: candidate.index, AssetName: assetName, Name: r.CSI.Name}
 			path := filepath.Join(setDirectory, name)
 			if restoreSingleDataFile {
@@ -203,10 +250,36 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			}
 
 			switch {
+			case r.CSI.Layout == 1009:
+				entry, resource, err := c.recoveredColor(r)
+				if err != nil {
+					record.Error = err.Error()
+				} else if xcassets {
+					contents.Colors = append(contents.Colors, entry)
+					path = filepath.Join(setDirectory, "Contents.json")
+					record.Mode = "decoded named color"
+					result.Decoded++
+				} else if err := writeIndentedJSON(path, resource); err != nil {
+					return result, fmt.Errorf("write %s: %w", name, err)
+				} else {
+					record.Mode = "decoded named color"
+					result.Decoded++
+				}
+
 			case r.CSI.Payload.Tag == "RAWD":
 				data, _, _, _ := exportablePayload(r.CSI)
 				if len(data) == 0 {
 					record.Error = "RAWD rendition contains no recoverable data"
+				} else if isLZFSEStream(data) {
+					data, err = lzfse.Decode(data)
+					if err != nil {
+						record.Error = fmt.Sprintf("decode compressed RAWD payload: %v", err)
+					} else if err := os.WriteFile(path, data, 0o644); err != nil {
+						return result, fmt.Errorf("write %s: %w", name, err)
+					} else {
+						record.Mode = "decoded original payload"
+						result.Decoded++
+					}
 				} else if err := os.WriteFile(path, data, 0o644); err != nil {
 					return result, fmt.Errorf("write %s: %w", name, err)
 				} else {
@@ -253,7 +326,9 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			record.File = filepath.ToSlash(relativeFile)
 			result.Written++
 			result.Files = append(result.Files, record)
-			contents.Images = append(contents.Images, recoveredContentsEntry(r, name, appIconSets[assetName]))
+			if !colorSet {
+				contents.Images = append(contents.Images, recoveredContentsEntry(r, name, appIconSets[assetName]))
+			}
 			if r.CSI.Flags.PreservedVectorRepresentation {
 				contents.Properties = map[string]bool{"preserves-vector-representation": true}
 			}
@@ -278,6 +353,121 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 		return result, fmt.Errorf("write recovery manifest: %w", err)
 	}
 	return result, nil
+}
+
+func recoveryCandidateIdentity(r Rendition) string {
+	if r.CSI.Layout != 1009 {
+		return r.CSI.Name
+	}
+	var identity strings.Builder
+	identity.WriteString(r.CSI.Name)
+	for _, attribute := range r.Key {
+		identity.WriteByte('|')
+		identity.WriteString(strconv.FormatUint(uint64(attribute.Type), 10))
+		identity.WriteByte('=')
+		identity.WriteString(strconv.FormatUint(uint64(attribute.Value), 10))
+	}
+	return identity.String()
+}
+
+func recoveredColorFileName(r Rendition) string {
+	name := strings.TrimSuffix(recoveredPathName(r.CSI.Name, "color"), filepath.Ext(r.CSI.Name))
+	appearance := attributeValue(r.Key, 7)
+	if appearance != 0 {
+		name += "-" + recoveredAppearanceFileSuffix(appearance)
+	}
+	if idiom := attributeValue(r.Key, 15); idiom != 0 {
+		name += "-" + idiomName(idiom)
+	}
+	if scale := attributeValue(r.Key, 12); scale > 1 {
+		name += fmt.Sprintf("-%dx", scale)
+	}
+	return name + ".color.json"
+}
+
+func recoveredAppearanceFileSuffix(value uint16) string {
+	if value == 1 {
+		return "dark"
+	}
+	return fmt.Sprintf("appearance-%d", value)
+}
+
+func (c *Catalog) recoveredColor(r Rendition) (recoveredColorEntry, recoveredColorResource, error) {
+	var entry recoveredColorEntry
+	var resource recoveredColorResource
+	if r.CSI.Payload.Tag != "COLR" || r.CSI.Payload.ColorSpaceID == nil {
+		return entry, resource, fmt.Errorf("Color rendition has no parsed COLR payload")
+	}
+	if len(r.CSI.Payload.ColorComponents) != 4 {
+		return entry, resource, fmt.Errorf("Color rendition has %d components, expected 4", len(r.CSI.Payload.ColorComponents))
+	}
+	colorSpace := recoveredColorSpace(*r.CSI.Payload.ColorSpaceID)
+	components := r.CSI.Payload.ColorComponents
+	entry = recoveredColorEntry{
+		Idiom: idiomName(attributeValue(r.Key, 15)),
+		Color: recoveredColorValue{
+			ColorSpace: colorSpace,
+			Components: recoveredColorComponents{
+				Red: formatColorComponent(components[0]), Green: formatColorComponent(components[1]),
+				Blue: formatColorComponent(components[2]), Alpha: formatColorComponent(components[3]),
+			},
+		},
+	}
+	appearance := c.appearanceName(attributeValue(r.Key, 7))
+	entry.Appearances = recoveredColorAppearances(appearance)
+	resource = recoveredColorResource{
+		ColorSpaceID: *r.CSI.Payload.ColorSpaceID, ColorSpace: colorSpace,
+		Components: append([]float64(nil), components...), Appearance: appearance, Idiom: entry.Idiom,
+	}
+	return entry, resource, nil
+}
+
+func recoveredColorSpace(id uint32) string {
+	switch id {
+	case 1:
+		return "srgb"
+	case 3:
+		return "display-p3"
+	case 4:
+		return "extended-srgb"
+	default:
+		return fmt.Sprintf("coreui-%d", id)
+	}
+}
+
+func (c *Catalog) appearanceName(id uint16) string {
+	if id == 0 {
+		return ""
+	}
+	for _, appearance := range c.Appearances {
+		if appearance.ID == id {
+			return appearance.Name
+		}
+	}
+	return fmt.Sprintf("UIAppearance%d", id)
+}
+
+func recoveredColorAppearances(name string) []recoveredAppearance {
+	switch name {
+	case "", "UIAppearanceAny":
+		return nil
+	case "UIAppearanceDark":
+		return []recoveredAppearance{{Appearance: "luminosity", Value: "dark"}}
+	case "UIAppearanceLight":
+		return []recoveredAppearance{{Appearance: "luminosity", Value: "light"}}
+	case "UIAppearanceHighContrast":
+		return []recoveredAppearance{{Appearance: "contrast", Value: "high"}}
+	case "UIAppearanceDarkHighContrast":
+		return []recoveredAppearance{{Appearance: "luminosity", Value: "dark"}, {Appearance: "contrast", Value: "high"}}
+	case "UIAppearanceLightHighContrast":
+		return []recoveredAppearance{{Appearance: "luminosity", Value: "light"}, {Appearance: "contrast", Value: "high"}}
+	default:
+		return []recoveredAppearance{{Appearance: "luminosity", Value: strings.ToLower(strings.TrimPrefix(name, "UIAppearance"))}}
+	}
+}
+
+func formatColorComponent(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func recoveryCandidateScore(candidate recoveryCandidate) int {

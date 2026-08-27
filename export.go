@@ -126,6 +126,9 @@ func exportablePayload(csi CSI) ([]byte, string, bool, string) {
 			data = data[:csi.Payload.DeclaredLength]
 		}
 		extension := originalExtension(csi)
+		if isLZFSEStream(data) {
+			return data, extension, false, "RAWD wrapper removed; LZFSE data remains compressed"
+		}
 		return data, extension, isDirectlyOpenable(extension), "unwrapped RAWD data"
 	case "CELM":
 		if len(raw) < 16 {
@@ -154,6 +157,18 @@ func exportablePayload(csi CSI) ([]byte, string, bool, string) {
 		return nil, "", false, "internal reference; no standalone payload"
 	}
 	return nil, "", false, "no payload"
+}
+
+func isLZFSEStream(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	switch string(data[:4]) {
+	case "bvx-", "bvx1", "bvx2", "bvxn":
+		return true
+	default:
+		return false
+	}
 }
 
 func originalExtension(csi CSI) string {

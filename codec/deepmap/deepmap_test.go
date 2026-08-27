@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestDecodeLegacyDirectContainer(t *testing.T) {
+	pixels := []byte{0x12, 0x34}
+	src := make([]byte, 28)
+	binary.LittleEndian.PutUint32(src[0:4], 5)
+	binary.LittleEndian.PutUint32(src[4:8], 2)
+	binary.LittleEndian.PutUint64(src[8:16], uint64(12+len(pixels)))
+	copy(src[16:20], "dmap")
+	src[20] = 1
+	src[21] = 1
+	src[22] = 10
+	src[23] = 2
+	src = append(src, pixels...)
+
+	got, err := Decode(src, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Width != 1 || got.Height != 1 || got.PixelFormat != 2 || string(got.Pixels) != string(pixels) {
+		t.Fatalf("got %dx%d format %d pixels %v", got.Width, got.Height, got.PixelFormat, got.Pixels)
+	}
+}
+
 func TestDecodeLegacyKCBC(t *testing.T) {
 	pixels := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	stream := make([]byte, 8)

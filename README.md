@@ -10,8 +10,8 @@ arm64. Each release includes a checksum manifest and signed GitHub build
 provenance. Verify both before running the binary:
 
 ```sh
-grep ' carfile_0.6.0_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
-gh attestation verify carfile_0.6.0_darwin_arm64.tar.gz \
+grep ' carfile_0.7.0_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
+gh attestation verify carfile_0.7.0_darwin_arm64.tar.gz \
   --repo devcxm/carfile-go
 ```
 

@@ -1,12 +1,126 @@
 package carfile
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"image"
 	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestExportResourcesDecodesCompressedRawData(t *testing.T) {
+	want := []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)
+	stream := make([]byte, 8)
+	copy(stream, "bvx-")
+	binary.LittleEndian.PutUint32(stream[4:], uint32(len(want)))
+	stream = append(stream, want...)
+	stream = append(stream, 'b', 'v', 'x', '$')
+	payload := make([]byte, 12)
+	copy(payload, "DWAR")
+	binary.LittleEndian.PutUint32(payload[4:8], 1)
+	binary.LittleEndian.PutUint32(payload[8:12], uint32(len(stream)))
+	payload = append(payload, stream...)
+	catalog := Catalog{Renditions: []Rendition{{
+		AssetName: "Symbol.svg",
+		CSI: CSI{Layout: 1000, LayoutName: "Data", Name: "CoreStructuredImage", Payload: Payload{
+			Tag: "RAWD", DeclaredLength: uint32(len(stream)), Data: payload,
+		}},
+	}}}
+
+	directory := t.TempDir()
+	result, err := catalog.ExportResources(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(directory, "Symbol.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) || result.Written != 1 || result.Decoded != 1 || result.Failed != 0 {
+		t.Fatalf("data = %q, result = %#v", got, result)
+	}
+}
+
+func TestExportResourcesPreservesColorAppearances(t *testing.T) {
+	catalog := colorCatalogFixture()
+	directory := t.TempDir()
+	result, err := catalog.ExportResources(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Written != 2 || result.Failed != 0 || result.Duplicates != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	for _, name := range []string{"AccentColor.color.json", "AccentColor-dark.color.json"} {
+		data, err := os.ReadFile(filepath.Join(directory, "AccentColor", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var colorResource map[string]any
+		if err := json.Unmarshal(data, &colorResource); err != nil {
+			t.Fatal(err)
+		}
+		if len(colorResource["components"].([]any)) != 4 {
+			t.Fatalf("%s has invalid components: %s", name, data)
+		}
+	}
+}
+
+func TestExportXCAssetsCreatesColorSet(t *testing.T) {
+	catalog := colorCatalogFixture()
+	directory := t.TempDir()
+	result, err := catalog.ExportXCAssets(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Written != 2 || result.Failed != 0 || result.Duplicates != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "Assets.xcassets", "AccentColor.colorset", "Contents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents struct {
+		Colors []struct {
+			Appearances []struct {
+				Appearance string `json:"appearance"`
+				Value      string `json:"value"`
+			} `json:"appearances"`
+		} `json:"colors"`
+	}
+	if err := json.Unmarshal(data, &contents); err != nil {
+		t.Fatal(err)
+	}
+	if len(contents.Colors) != 2 || len(contents.Colors[0].Appearances) != 0 ||
+		len(contents.Colors[1].Appearances) != 1 || contents.Colors[1].Appearances[0].Value != "dark" {
+		t.Fatalf("unexpected color set: %s", data)
+	}
+}
+
+func colorCatalogFixture() Catalog {
+	colorSpaceSRGB := uint32(1)
+	return Catalog{
+		Appearances: []Appearance{{Name: "UIAppearanceAny", ID: 0}, {Name: "UIAppearanceDark", ID: 1}},
+		Renditions: []Rendition{
+			{
+				AssetName: "AccentColor",
+				Key:       []AttributeValue{{Type: 7, Value: 0}, {Type: 15, Value: 0}},
+				CSI: CSI{Layout: 1009, LayoutName: "Color", Name: "AccentColor", Payload: Payload{
+					Tag: "COLR", ColorSpaceID: &colorSpaceSRGB, ColorComponents: []float64{0.1, 0.2, 0.3, 1},
+				}},
+			},
+			{
+				AssetName: "AccentColor",
+				Key:       []AttributeValue{{Type: 7, Value: 1}, {Type: 15, Value: 0}},
+				CSI: CSI{Layout: 1009, LayoutName: "Color", Name: "AccentColor", Payload: Payload{
+					Tag: "COLR", ColorSpaceID: &colorSpaceSRGB, ColorComponents: []float64{0.9, 0.8, 0.7, 1},
+				}},
+			},
+		},
+	}
+}
 
 func TestExportResourcesRestoresSingleDataAssetFileName(t *testing.T) {
 	data := []byte(`{"continents":[]}`)

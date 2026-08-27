@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	deepmap2Raw      = 1
 	deepmap2Default  = 2
 	deepmap2Lossless = 3
 	deepmap2Palette  = 4
@@ -106,7 +107,7 @@ func DecodePaletteData(palette, planesAndIndices []byte, width, height uint16, p
 }
 
 // Decode decodes the data after a CELM wrapper. It supports the default,
-// lossless, and palette encodings emitted by current versions of actool.
+// raw, default, lossless, and palette encodings emitted by actool.
 func Decode(src []byte) (Bitmap, error) {
 	return decodePortable(src)
 }
@@ -116,7 +117,7 @@ func decodePortable(src []byte) (Bitmap, error) {
 	if len(src) >= 4 && string(src[:4]) == "KCBC" {
 		return decodeKCBCDeepmap2(src)
 	}
-	if len(src) < 32 {
+	if len(src) < 28 {
 		return result, fmt.Errorf("Deepmap2 payload is truncated: have %d bytes", len(src))
 	}
 	outerVersion := binary.LittleEndian.Uint32(src[0:4])
@@ -129,6 +130,9 @@ func decodePortable(src []byte) (Bitmap, error) {
 		return result, fmt.Errorf("Deepmap2 container declares %d bytes, has %d", outerLength, len(src)-16)
 	}
 	containerEnd := 16 + int(outerLength)
+	if containerEnd < 28 {
+		return result, fmt.Errorf("Deepmap2 container is truncated: have %d bytes", containerEnd)
+	}
 	if string(src[16:20]) != "dmp2" {
 		return result, fmt.Errorf("invalid Deepmap2 magic %q", src[16:20])
 	}
@@ -152,6 +156,18 @@ func decodePortable(src []byte) (Bitmap, error) {
 	pixelBytes := uint64(result.Width) * uint64(result.Height) * uint64(layout.bytesPerPixel())
 	if pixelBytes > uint64(maxInt()) {
 		return result, fmt.Errorf("dmp2 bitmap is too large")
+	}
+	switch result.Method {
+	case deepmap2Raw:
+		payload := src[28:containerEnd]
+		if uint64(len(payload)) != pixelBytes {
+			return result, fmt.Errorf("dmp2 raw data has %d bytes, expected %d", len(payload), pixelBytes)
+		}
+		result.Pixels = append([]byte(nil), payload...)
+		return result, nil
+	}
+	if containerEnd < 32 {
+		return result, fmt.Errorf("dmp2 method %d descriptor is truncated", result.Method)
 	}
 	descriptor := binary.LittleEndian.Uint32(src[28:32])
 	payload := src[32:containerEnd]

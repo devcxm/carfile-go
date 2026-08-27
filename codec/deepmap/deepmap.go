@@ -10,13 +10,15 @@ import (
 	"github.com/devcxm/carfile-go/codec/lzvn"
 )
 
-// Decode expands a KCBC sequence containing legacy dmap payloads. The legacy
-// inner bitmap format is converted losslessly to its dmp2 equivalent and then
-// decoded by the shared Deepmap implementation.
+// Decode expands either a direct legacy dmap container or a KCBC sequence
+// containing dmap payloads.
 func Decode(src []byte, width, height uint32) (deepmap2.Bitmap, error) {
 	var result deepmap2.Bitmap
 	if width == 0 || height == 0 || width > 0xffff || height > 0xffff {
 		return result, fmt.Errorf("invalid legacy deepmap geometry %dx%d", width, height)
+	}
+	if len(src) >= 20 && string(src[16:20]) == "dmap" {
+		return decodePortableChunk(src, uint16(width), uint16(height))
 	}
 	rows := uint32(0)
 	for offset, chunk := 0, 0; rows < height; chunk++ {

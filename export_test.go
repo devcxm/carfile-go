@@ -40,3 +40,18 @@ func TestExportRaw(t *testing.T) {
 		t.Fatalf("unexpected CELM export: %v, %#v", compressed, result.Files[1])
 	}
 }
+
+func TestExportRawMarksCompressedOriginalAsNotOpenable(t *testing.T) {
+	stream := []byte{'b', 'v', 'x', '-', 0, 0, 0, 0, 'b', 'v', 'x', '$'}
+	payload := append([]byte("DWAR\x01\x00\x00\x00\x0c\x00\x00\x00"), stream...)
+	catalog := Catalog{Renditions: []Rendition{{
+		AssetName: "symbol", CSI: CSI{Name: "symbol.svg", Payload: Payload{Tag: "RAWD", DeclaredLength: uint32(len(stream)), Data: payload}},
+	}}}
+	result, err := catalog.ExportRaw(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Files[0].Openable || result.Files[0].Status != "RAWD wrapper removed; LZFSE data remains compressed" {
+		t.Fatalf("unexpected record: %#v", result.Files[0])
+	}
+}
