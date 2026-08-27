@@ -188,3 +188,12 @@ recovered as semantic JSON; icon image stack and icon group descriptors are
 retained as metadata alongside their independently recovered images.
 
 Original RAWD files such as SVG and JPEG are copied byte-for-byte. Compiled bitmaps are re-encoded as PNG; their original PNG compression, ancillary metadata, and source group hierarchy are not present in the CAR and cannot be reconstructed exactly.
+
+## References
+
+The following public resources provide additional background on compiled Asset
+Catalog files and related compression formats:
+
+- [Timac — Reverse engineering the `.car` file format](https://blog.timac.org/2018/1018-reverse-engineering-the-car-file-format/)
+- [DBG.RE — A Deep Dive into Apple's `.car` File Format](https://dbg.re/posts/car-file-format/)
+- [Apple — LZFSE reference implementation](https://github.com/lzfse/lzfse)
