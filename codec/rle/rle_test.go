@@ -44,3 +44,21 @@ func TestDecodeRejectsUnknownPacketType(t *testing.T) {
 		t.Fatal("Decode succeeded with an unknown packet type")
 	}
 }
+
+func TestDecodeGA8Encoding(t *testing.T) {
+	src := make([]byte, 20)
+	binary.LittleEndian.PutUint32(src[0:4], 3)
+	binary.LittleEndian.PutUint32(src[4:8], 2)
+	binary.LittleEndian.PutUint32(src[8:12], 1)
+	binary.LittleEndian.PutUint32(src[12:16], 16)
+	binary.LittleEndian.PutUint32(src[16:20], 2)
+	src = append(src, 10, 20, 30, 40)
+
+	pixels, err := Decode(src, 2, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pixels) != string([]byte{10, 20, 30, 40}) {
+		t.Fatalf("pixels = %v", pixels)
+	}
+}

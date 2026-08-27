@@ -103,6 +103,7 @@ jobs:
             test "$("$binary" --version)" = "carfile $version"
           fi
           cp LICENSE README.md "dist/$package/"
+          cp -R docs "dist/$package/"
           if test "${{ matrix.archive }}" = "zip"; then
             (cd dist && zip -qr "$archive" "$package")
           else

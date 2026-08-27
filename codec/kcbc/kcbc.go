@@ -2,8 +2,11 @@
 package kcbc
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/devcxm/carfile-go/codec/lzfse"
 )
@@ -12,6 +15,15 @@ import (
 // slices. The returned pixels are tightly packed; alignment bytes at the end
 // of source rows are discarded.
 func Decode(src []byte, width, height uint32, bytesPerPixel int) ([]byte, error) {
+	return decode(src, width, height, bytesPerPixel, lzfse.Decode)
+}
+
+// DecodeGzip expands a KCBC container whose chunks use gzip compression.
+func DecodeGzip(src []byte, width, height uint32, bytesPerPixel int) ([]byte, error) {
+	return decode(src, width, height, bytesPerPixel, decodeGzip)
+}
+
+func decode(src []byte, width, height uint32, bytesPerPixel int, decompress func([]byte) ([]byte, error)) ([]byte, error) {
 	if width == 0 || height == 0 || bytesPerPixel <= 0 {
 		return nil, fmt.Errorf("invalid bitmap geometry %dx%d at %d bytes per pixel", width, height, bytesPerPixel)
 	}
@@ -41,7 +53,7 @@ func Decode(src []byte, width, height uint32, bytesPerPixel int) ([]byte, error)
 		if payloadEnd > uint64(len(src)) {
 			return nil, fmt.Errorf("KCBC chunk at offset %d needs %d compressed bytes", offset, compressedBytes)
 		}
-		decoded, err := lzfse.Decode(src[int(payloadStart):int(payloadEnd)])
+		decoded, err := decompress(src[int(payloadStart):int(payloadEnd)])
 		if err != nil {
 			return nil, fmt.Errorf("KCBC chunk at row %d: %w", rows, err)
 		}
@@ -63,6 +75,22 @@ func Decode(src []byte, width, height uint32, bytesPerPixel int) ([]byte, error)
 		return nil, fmt.Errorf("KCBC payload has %d trailing bytes", len(src)-offset)
 	}
 	return dst, nil
+}
+
+func decodeGzip(src []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(src))
+	if err != nil {
+		return nil, err
+	}
+	decoded, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return decoded, nil
 }
 
 func maxInt() int {

@@ -99,6 +99,82 @@ func TestExportXCAssetsCreatesColorSet(t *testing.T) {
 	}
 }
 
+func TestExportXCAssetsCreatesGrayColorSet(t *testing.T) {
+	colorSpaceGray := uint32(2)
+	catalog := Catalog{Renditions: []Rendition{{
+		AssetName: "Shadow", CSI: CSI{Layout: 1009, Name: "Shadow", Payload: Payload{
+			Tag: "COLR", ColorSpaceID: &colorSpaceGray, ColorComponents: []float64{0.25, 0.75},
+		}},
+	}}}
+	directory := t.TempDir()
+	result, err := catalog.ExportXCAssets(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Failed != 0 || result.Written != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "Assets.xcassets", "Shadow.colorset", "Contents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents struct {
+		Colors []struct {
+			Color struct {
+				ColorSpace string            `json:"color-space"`
+				Components map[string]string `json:"components"`
+			} `json:"color"`
+		} `json:"colors"`
+	}
+	if err := json.Unmarshal(data, &contents); err != nil {
+		t.Fatal(err)
+	}
+	if len(contents.Colors) != 1 || contents.Colors[0].Color.ColorSpace != "gray-gamma-22" ||
+		contents.Colors[0].Color.Components["white"] != "0.25" || contents.Colors[0].Color.Components["alpha"] != "0.75" {
+		t.Fatalf("unexpected gray color set: %s", data)
+	}
+}
+
+func TestExportResourcesWritesStructuredMetadata(t *testing.T) {
+	catalog := Catalog{Renditions: []Rendition{
+		{
+			AssetName: "Gradient", CSI: CSI{Layout: 1021, LayoutName: "Named Gradient", Name: "Gradient", Payload: Payload{
+				Tag: "ARGG", Gradient: &Gradient{Type: 1, Start: [2]float32{0.5, 0}, End: [2]float32{0.5, 1},
+					Stops: []GradientStop{{Location: 0, ColorName: "StartColor"}, {Location: 1, ColorName: "EndColor"}}},
+			}},
+		},
+		{
+			AssetName: "AppIcon", CSI: CSI{Layout: 1019, LayoutName: "Icon Image Stack", Name: "AppIcon.iconstack", PixelFormat: "DATA", Payload: Payload{
+				Tag: "RAWD", Data: []byte("DWAR\x00\x00\x00\x00\x00\x00\x00\x00"),
+			}},
+		},
+	}}
+	directory := t.TempDir()
+	result, err := catalog.ExportResources(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Failed != 0 || result.Written != 2 || result.Decoded != 2 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	for _, path := range []string{
+		filepath.Join(directory, "Gradient", "Gradient.gradient.json"),
+		filepath.Join(directory, "AppIcon", "AppIcon.iconstack.json"),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if metadata["layout_name"] == "" {
+			t.Fatalf("missing layout metadata in %s", data)
+		}
+	}
+}
+
 func colorCatalogFixture() Catalog {
 	colorSpaceSRGB := uint32(1)
 	return Catalog{

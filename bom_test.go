@@ -64,3 +64,27 @@ func TestBOMTreeWalksLinkedLeaves(t *testing.T) {
 		t.Fatalf("unexpected entries: %#v", entries)
 	}
 }
+
+func TestParseBOMAcceptsUnusedBlockSentinel(t *testing.T) {
+	raw := make([]byte, 128)
+	be := binary.BigEndian
+	copy(raw[:8], "BOMStore")
+	be.PutUint32(raw[8:12], 1)
+	be.PutUint32(raw[12:16], 2)
+	be.PutUint32(raw[16:20], 64)
+	be.PutUint32(raw[20:24], 20)
+	be.PutUint32(raw[24:28], 96)
+	be.PutUint32(raw[28:32], 4)
+
+	be.PutUint32(raw[64:68], 2)
+	be.PutUint32(raw[76:80], ^uint32(0))
+	be.PutUint32(raw[80:84], ^uint32(0))
+
+	bom, err := ParseBOM(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bom.Block(1); err == nil {
+		t.Fatal("unused block sentinel was readable")
+	}
+}

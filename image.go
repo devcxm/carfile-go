@@ -1,9 +1,12 @@
 package carfile
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"fmt"
 	"image"
+	"io"
 
 	"github.com/devcxm/carfile-go/codec/deepmap"
 	"github.com/devcxm/carfile-go/codec/deepmap2"
@@ -13,8 +16,10 @@ import (
 	"github.com/devcxm/carfile-go/codec/rle"
 )
 
-// DecodeRenditionImage converts a supported compressed pixel rendition into a
-// standard-library image using portable Go decoders.
+// DecodeRenditionImage converts a supported CELM rendition into a
+// standard-library image using portable Go decoders. Compression selects how
+// bytes are expanded; the independent CSI pixel format selects how those bytes
+// become color channels.
 func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	csi := rendition.CSI
 	if csi.Payload.Tag != "CELM" || len(csi.Payload.Data) < 16 || csi.Payload.CompressionType == nil {
@@ -22,12 +27,42 @@ func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	}
 	data := csi.Payload.Data[16:]
 	switch *csi.Payload.CompressionType {
+	case 0:
+		bytesPerPixel, err := pixelStorageBytes(csi.PixelFormat)
+		if err != nil {
+			return nil, err
+		}
+		pixels, err := stripBitmapRowPadding(data, csi.Width, csi.Height, bytesPerPixel)
+		if err != nil {
+			return nil, err
+		}
+		return imageFromPixels(pixels, csi.Width, csi.Height, csi.PixelFormat, false)
+
 	case 1:
 		bytesPerPixel, err := pixelStorageBytes(csi.PixelFormat)
 		if err != nil {
 			return nil, err
 		}
 		pixels, err := rle.Decode(data, csi.Width, csi.Height, bytesPerPixel)
+		if err != nil {
+			return nil, err
+		}
+		return imageFromPixels(pixels, csi.Width, csi.Height, csi.PixelFormat, false)
+
+	case 2:
+		bytesPerPixel, err := pixelStorageBytes(csi.PixelFormat)
+		if err != nil {
+			return nil, err
+		}
+		var pixels []byte
+		if len(data) >= 4 && string(data[:4]) == "KCBC" {
+			pixels, err = kcbc.DecodeGzip(data, csi.Width, csi.Height, bytesPerPixel)
+		} else {
+			pixels, err = decodeGzipBitmap(data)
+			if err == nil {
+				pixels, err = stripBitmapRowPadding(pixels, csi.Width, csi.Height, bytesPerPixel)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -90,6 +125,22 @@ func DecodeRenditionImage(rendition Rendition) (image.Image, error) {
 	default:
 		return nil, fmt.Errorf("unsupported bitmap compression %d (%s)", *csi.Payload.CompressionType, csi.Payload.Compression)
 	}
+}
+
+func decodeGzipBitmap(data []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("open gzip bitmap: %w", err)
+	}
+	pixels, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read gzip bitmap: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close gzip bitmap: %w", closeErr)
+	}
+	return pixels, nil
 }
 
 func pixelStorageBytes(format string) (int, error) {

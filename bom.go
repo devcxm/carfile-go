@@ -92,7 +92,7 @@ func ParseBOM(r io.ReaderAt, size int64) (*BOM, error) {
 	for i := range b.blocks {
 		pos := 4 + i*8
 		block := BOMBlock{Offset: be.Uint32(index[pos : pos+4]), Length: be.Uint32(index[pos+4 : pos+8])}
-		if block.Length != 0 {
+		if block != unusedBOMBlock && block.Length != 0 {
 			if _, err := b.checkedRange(uint64(block.Offset), uint64(block.Length)); err != nil {
 				return nil, fmt.Errorf("BOMStore: block %d: %w", i, err)
 			}
@@ -167,8 +167,13 @@ func (b *BOM) Block(id uint32) ([]byte, error) {
 		return nil, fmt.Errorf("BOMStore: block %d does not exist", id)
 	}
 	block := b.blocks[id]
+	if block == unusedBOMBlock {
+		return nil, fmt.Errorf("BOMStore: block %d is unused", id)
+	}
 	return b.readRange(uint64(block.Offset), uint64(block.Length), fmt.Sprintf("block %d", id))
 }
+
+var unusedBOMBlock = BOMBlock{Offset: ^uint32(0), Length: ^uint32(0)}
 
 type bomTreeHeader struct {
 	Root      uint32

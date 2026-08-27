@@ -15,9 +15,15 @@ func Decode(src []byte, width, height uint32, bytesPerPixel int) ([]byte, error)
 	if headerBytes > uint64(len(src)) {
 		return nil, fmt.Errorf("RLE row table is truncated")
 	}
-	components := binary.LittleEndian.Uint32(src[0:4])
-	if components != uint32(bytesPerPixel) {
-		return nil, fmt.Errorf("RLE declares %d-byte pixels, expected %d", components, bytesPerPixel)
+	encoding := binary.LittleEndian.Uint32(src[0:4])
+	expectedEncoding := uint32(bytesPerPixel)
+	if bytesPerPixel == 2 {
+		expectedEncoding = 3
+	} else if bytesPerPixel == 8 {
+		expectedEncoding = 20
+	}
+	if encoding != expectedEncoding {
+		return nil, fmt.Errorf("RLE pixel encoding %d differs from expected %d", encoding, expectedEncoding)
 	}
 	if encodedWidth, encodedHeight := binary.LittleEndian.Uint32(src[4:8]), binary.LittleEndian.Uint32(src[8:12]); encodedWidth != width || encodedHeight != height {
 		return nil, fmt.Errorf("RLE geometry %dx%d differs from CSI geometry %dx%d", encodedWidth, encodedHeight, width, height)

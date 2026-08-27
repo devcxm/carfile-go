@@ -138,7 +138,20 @@ type Payload struct {
 	Compression     string    `json:"compression,omitempty"`
 	ColorSpaceID    *uint32   `json:"color_space_id,omitempty"`
 	ColorComponents []float64 `json:"color_components,omitempty"`
+	Gradient        *Gradient `json:"gradient,omitempty"`
 	Data            []byte    `json:"-"`
+}
+
+type Gradient struct {
+	Type  uint32         `json:"type"`
+	Start [2]float32     `json:"start"`
+	End   [2]float32     `json:"end"`
+	Stops []GradientStop `json:"stops"`
+}
+
+type GradientStop struct {
+	Location  float32 `json:"location"`
+	ColorName string  `json:"color_name"`
 }
 
 // Open parses the CAR file at path.
@@ -401,13 +414,25 @@ func parseTLVs(raw []byte, keyTypes []AttributeType, order binary.ByteOrder) ([]
 	var result []TLV
 	for pos := 0; pos < len(raw); {
 		if len(raw)-pos < 8 {
-			return nil, fmt.Errorf("CSI TLV has %d trailing bytes", len(raw)-pos)
+			if validTLVTrailer(raw[pos:], order) {
+				break
+			}
+			return nil, fmt.Errorf("CSI TLV has %d trailing bytes: %x", len(raw)-pos, raw[pos:])
 		}
 		typ := order.Uint32(raw[pos : pos+4])
 		length := order.Uint32(raw[pos+4 : pos+8])
 		pos += 8
+		if uint64(length) > uint64(len(raw)-pos) && length >= 8 && uint64(length-8) == uint64(len(raw)-pos) {
+			// Some newer TLVs store their full record size instead of only
+			// the value size used by older records.
+			length -= 8
+		}
+		if uint64(length) > uint64(len(raw)-pos) && length&0x7ff == 0 && uint64(length>>11) == uint64(len(raw)-pos) {
+			// Some catalogs encode the value size shifted left by 11 bits.
+			length >>= 11
+		}
 		if uint64(length) > uint64(len(raw)-pos) {
-			return nil, fmt.Errorf("CSI TLV type %d length %d exceeds remaining %d bytes", typ, length, len(raw)-pos)
+			return nil, fmt.Errorf("CSI TLV type %d length %d exceeds remaining %d bytes: %x", typ, length, len(raw)-pos, raw[pos-8:])
 		}
 		value := raw[pos : pos+int(length)]
 		pos += int(length)
@@ -458,6 +483,8 @@ func parseRenditionKeyTokens(raw []byte, order binary.ByteOrder) ([]AttributeVal
 	return result, nil
 }
 
+// parsePayload dispatches only on the storage wrapper tag. Layout semantics,
+// bitmap compression, and decoded pixel interpretation belong to later layers.
 func parsePayload(raw []byte, order binary.ByteOrder) Payload {
 	payload := Payload{Length: len(raw), Data: raw}
 	if len(raw) < 4 {
@@ -492,8 +519,65 @@ func parsePayload(raw []byte, order binary.ByteOrder) Payload {
 				}
 			}
 		}
+	case "ARGG":
+		payload.Gradient = parseGradient(raw, order)
 	}
 	return payload
+}
+
+func parseGradient(raw []byte, order binary.ByteOrder) *Gradient {
+	if len(raw) < 32 {
+		return nil
+	}
+	count := order.Uint32(raw[4:8])
+	if uint64(count) > uint64((len(raw)-32)/8) {
+		return nil
+	}
+	gradient := &Gradient{
+		Type: order.Uint32(raw[8:12]),
+		Start: [2]float32{
+			math.Float32frombits(order.Uint32(raw[16:20])),
+			math.Float32frombits(order.Uint32(raw[20:24])),
+		},
+		End: [2]float32{
+			math.Float32frombits(order.Uint32(raw[24:28])),
+			math.Float32frombits(order.Uint32(raw[28:32])),
+		},
+		Stops: make([]GradientStop, 0, count),
+	}
+	pos := 32
+	for i := uint32(0); i < count; i++ {
+		if len(raw)-pos < 8 {
+			return nil
+		}
+		location := math.Float32frombits(order.Uint32(raw[pos : pos+4]))
+		nameLength := order.Uint32(raw[pos+4 : pos+8])
+		pos += 8
+		if uint64(nameLength) > uint64(len(raw)-pos) {
+			return nil
+		}
+		gradient.Stops = append(gradient.Stops, GradientStop{
+			Location: location, ColorName: cString(raw[pos : pos+int(nameLength)]),
+		})
+		pos += int(nameLength)
+	}
+	return gradient
+}
+
+func allZero(raw []byte) bool {
+	for _, value := range raw {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func validTLVTrailer(raw []byte, order binary.ByteOrder) bool {
+	if allZero(raw) {
+		return true
+	}
+	return len(raw) == 4 && order.Uint32(raw) == 3
 }
 
 func (t AttributeType) String() string {
@@ -521,7 +605,8 @@ func layoutName(layout uint16) string {
 		50: "Animation Filmstrip", 1000: "Data", 1001: "External Link", 1002: "Layer Stack", 1003: "Internal Reference",
 		1004: "Packed Image", 1005: "Named Content", 1006: "Thinning Placeholder", 1007: "Texture",
 		1008: "Texture Image", 1009: "Color", 1010: "Multisize Image Set", 1011: "Layer Reference",
-		1012: "Content Rendition", 1013: "Recognition Object",
+		1012: "Content Rendition", 1013: "Recognition Object", 1019: "Icon Image Stack",
+		1020: "Icon Group", 1021: "Named Gradient",
 	}
 	if name, ok := names[layout]; ok {
 		return name

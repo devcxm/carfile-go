@@ -10,8 +10,8 @@ arm64. Each release includes a checksum manifest and signed GitHub build
 provenance. Verify both before running the binary:
 
 ```sh
-grep ' carfile_0.7.0_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
-gh attestation verify carfile_0.7.0_darwin_arm64.tar.gz \
+grep ' carfile_0.8.0_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 -c -
+gh attestation verify carfile_0.8.0_darwin_arm64.tar.gz \
   --repo devcxm/carfile-go
 ```
 
@@ -160,21 +160,31 @@ import (
 
 ## Supported formats
 
+See [the implemented Assets.car format model](docs/assets-car-format.md) for
+binary layouts, compatibility levels, current codec matrices, and the
+extension procedure. A successful logical `resources` extraction does not by
+itself imply that every physical rendition is supported; use `png` when
+checking physical bitmap-codec coverage.
+
 The parser reads:
 
 - BOMStore headers, block indices, variables, and linked B+ tree leaves;
 - `CARHEADER`, `EXTENDED_METADATA`, and `KEYFORMAT`;
 - `APPEARANCEKEYS`, `FACETKEYS`, and `RENDITIONS`;
-- CSI headers, TLV metadata, internal links, and common `RAWD`, `CELM`, and `COLR` payloads.
+- CSI headers, TLV metadata, internal links, and `RAWD`, `CELM`, `COLR`, and named-gradient payloads.
 
 The decoder supports:
 
 - LZFSE `bvx2`, raw `bvx-`, and embedded LZVN `bvxn` streams;
 - raw LZVN instruction streams;
-- KCBC horizontal bitmap chunks and row-padding removal;
+- uncompressed, RLE, gzip, and LZFSE bitmaps, including KCBC horizontal chunks and row-padding removal;
 - row-oriented RLE and quantized `palette-img` bitmaps;
 - legacy Deepmap and Deepmap2 default, lossless, and palette encodings;
 - ARGB/BGRA, GA8, and wide-gamut RGBW pixels;
 - packed-image links, including lower-left coordinate conversion and atlas cropping.
+
+Named colors support RGB and grayscale component sets. Named gradients are
+recovered as semantic JSON; icon image stack and icon group descriptors are
+retained as metadata alongside their independently recovered images.
 
 Original RAWD files such as SVG and JPEG are copied byte-for-byte. Compiled bitmaps are re-encoded as PNG; their original PNG compression, ancillary metadata, and source group hierarchy are not present in the CAR and cannot be reconstructed exactly.

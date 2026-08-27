@@ -3,6 +3,7 @@ package carfile
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"math"
 	"testing"
 )
 
@@ -103,5 +104,81 @@ func TestParseInternalLinkTLV(t *testing.T) {
 	}
 	if len(tlvs[0].LinkedKey) != 4 || tlvs[0].LinkedKey[2].Type != 8 || tlvs[0].LinkedKey[2].Value != 29 {
 		t.Fatalf("linked key = %#v", tlvs[0].LinkedKey)
+	}
+}
+
+func TestParseTLVsAcceptsZeroAlignmentPadding(t *testing.T) {
+	raw := make([]byte, 12)
+	binary.LittleEndian.PutUint32(raw[0:4], 1006)
+	binary.LittleEndian.PutUint32(raw[4:8], 0)
+	tlvs, err := parseTLVs(raw, nil, binary.LittleEndian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tlvs) != 1 || tlvs[0].Type != 1006 {
+		t.Fatalf("unexpected TLVs: %#v", tlvs)
+	}
+	binary.LittleEndian.PutUint32(raw[8:12], 3)
+	if _, err := parseTLVs(raw, nil, binary.LittleEndian); err != nil {
+		t.Fatalf("version trailer was rejected: %v", err)
+	}
+	binary.LittleEndian.PutUint32(raw[8:12], 4)
+	if _, err := parseTLVs(raw, nil, binary.LittleEndian); err == nil {
+		t.Fatal("nonzero trailing bytes were accepted")
+	}
+}
+
+func TestParseTLVWhoseLengthIncludesHeader(t *testing.T) {
+	raw := make([]byte, 20)
+	binary.LittleEndian.PutUint32(raw[0:4], 1019)
+	binary.LittleEndian.PutUint32(raw[4:8], 20)
+	binary.LittleEndian.PutUint32(raw[8:12], 1)
+	binary.LittleEndian.PutUint32(raw[12:16], 3)
+	binary.LittleEndian.PutUint32(raw[16:20], 3)
+	tlvs, err := parseTLVs(raw, nil, binary.LittleEndian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tlvs) != 1 || tlvs[0].Length != 12 {
+		t.Fatalf("unexpected TLV: %#v", tlvs)
+	}
+}
+
+func TestParseTLVWithShiftedLength(t *testing.T) {
+	raw := make([]byte, 20)
+	binary.LittleEndian.PutUint32(raw[0:4], 1019)
+	binary.LittleEndian.PutUint32(raw[4:8], 12<<11)
+	tlvs, err := parseTLVs(raw, nil, binary.LittleEndian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tlvs) != 1 || tlvs[0].Length != 12 {
+		t.Fatalf("unexpected TLV: %#v", tlvs)
+	}
+}
+
+func TestParseNamedGradientPayload(t *testing.T) {
+	raw := make([]byte, 32)
+	copy(raw, "ARGG")
+	le := binary.LittleEndian
+	le.PutUint32(raw[4:8], 1)
+	le.PutUint32(raw[8:12], 1)
+	le.PutUint32(raw[16:20], math.Float32bits(0.5))
+	le.PutUint32(raw[24:28], math.Float32bits(0.5))
+	le.PutUint32(raw[28:32], math.Float32bits(1))
+	name := []byte("AccentColor\x00")
+	stop := make([]byte, 8)
+	le.PutUint32(stop[0:4], math.Float32bits(0.25))
+	le.PutUint32(stop[4:8], uint32(len(name)))
+	raw = append(raw, stop...)
+	raw = append(raw, name...)
+
+	payload := parsePayload(raw, le)
+	if payload.Gradient == nil || payload.Gradient.Type != 1 || len(payload.Gradient.Stops) != 1 {
+		t.Fatalf("unexpected gradient: %#v", payload.Gradient)
+	}
+	if payload.Gradient.Start != ([2]float32{0.5, 0}) || payload.Gradient.End != ([2]float32{0.5, 1}) ||
+		payload.Gradient.Stops[0].Location != 0.25 || payload.Gradient.Stops[0].ColorName != "AccentColor" {
+		t.Fatalf("unexpected gradient values: %#v", payload.Gradient)
 	}
 }

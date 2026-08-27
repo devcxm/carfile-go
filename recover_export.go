@@ -67,9 +67,10 @@ type recoveredColorValue struct {
 }
 
 type recoveredColorComponents struct {
-	Red   string `json:"red"`
-	Green string `json:"green"`
-	Blue  string `json:"blue"`
+	Red   string `json:"red,omitempty"`
+	Green string `json:"green,omitempty"`
+	Blue  string `json:"blue,omitempty"`
+	White string `json:"white,omitempty"`
 	Alpha string `json:"alpha"`
 }
 
@@ -91,6 +92,16 @@ type recoveredImageEntry struct {
 type recoveredInfo struct {
 	Version int    `json:"version"`
 	Author  string `json:"author"`
+}
+
+type recoveredStructuredResource struct {
+	Layout      uint16           `json:"layout"`
+	LayoutName  string           `json:"layout_name"`
+	Name        string           `json:"name"`
+	PixelFormat string           `json:"pixel_format,omitempty"`
+	Key         []AttributeValue `json:"key,omitempty"`
+	TLVs        []TLV            `json:"tlvs,omitempty"`
+	Gradient    *Gradient        `json:"gradient,omitempty"`
 }
 
 // ExportXCAssets recreates a flat, valid Assets.xcassets directory. It
@@ -242,13 +253,19 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			name := recoveredPathName(r.CSI.Name, fmt.Sprintf("rendition-%d.png", candidate.index))
 			if colorSet {
 				name = recoveredColorFileName(r)
+			} else if structuredResourceSuffix(r.CSI.Layout) != "" {
+				name = strings.TrimSuffix(name, filepath.Ext(name)) + structuredResourceSuffix(r.CSI.Layout)
 			}
 			record := RecoveryRecord{Index: candidate.index, AssetName: assetName, Name: r.CSI.Name}
 			path := filepath.Join(setDirectory, name)
+			catalogImage := true
 			if restoreSingleDataFile {
 				path = setDirectory
 			}
 
+			// Recovery dispatches on semantic layout or payload availability.
+			// Bitmap compression and pixel layout stay encapsulated in
+			// DecodeRenditionImage so new codecs do not multiply layout cases.
 			switch {
 			case r.CSI.Layout == 1009:
 				entry, resource, err := c.recoveredColor(r)
@@ -265,6 +282,24 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 					record.Mode = "decoded named color"
 					result.Decoded++
 				}
+
+			case r.CSI.Layout == 1021 && r.CSI.Payload.Gradient != nil:
+				metadata := recoveredStructuredMetadata(r)
+				if err := writeIndentedJSON(path, metadata); err != nil {
+					return result, fmt.Errorf("write %s: %w", name, err)
+				}
+				catalogImage = false
+				record.Mode = "decoded named gradient"
+				result.Decoded++
+
+			case (r.CSI.Layout == 1019 || r.CSI.Layout == 1020) && r.CSI.Payload.Tag == "RAWD" && r.CSI.Payload.DeclaredLength == 0:
+				metadata := recoveredStructuredMetadata(r)
+				if err := writeIndentedJSON(path, metadata); err != nil {
+					return result, fmt.Errorf("write %s: %w", name, err)
+				}
+				catalogImage = false
+				record.Mode = "decoded structured metadata"
+				result.Decoded++
 
 			case r.CSI.Payload.Tag == "RAWD":
 				data, _, _, _ := exportablePayload(r.CSI)
@@ -326,7 +361,7 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 			record.File = filepath.ToSlash(relativeFile)
 			result.Written++
 			result.Files = append(result.Files, record)
-			if !colorSet {
+			if !colorSet && catalogImage {
 				contents.Images = append(contents.Images, recoveredContentsEntry(r, name, appIconSets[assetName]))
 			}
 			if r.CSI.Flags.PreservedVectorRepresentation {
@@ -356,7 +391,7 @@ func (c *Catalog) exportLogicalAssets(directory string, xcassets bool, matcher r
 }
 
 func recoveryCandidateIdentity(r Rendition) string {
-	if r.CSI.Layout != 1009 {
+	if r.CSI.Layout != 1009 && (r.CSI.Layout < 1019 || r.CSI.Layout > 1021) {
 		return r.CSI.Name
 	}
 	var identity strings.Builder
@@ -398,19 +433,27 @@ func (c *Catalog) recoveredColor(r Rendition) (recoveredColorEntry, recoveredCol
 	if r.CSI.Payload.Tag != "COLR" || r.CSI.Payload.ColorSpaceID == nil {
 		return entry, resource, fmt.Errorf("Color rendition has no parsed COLR payload")
 	}
-	if len(r.CSI.Payload.ColorComponents) != 4 {
-		return entry, resource, fmt.Errorf("Color rendition has %d components, expected 4", len(r.CSI.Payload.ColorComponents))
-	}
 	colorSpace := recoveredColorSpace(*r.CSI.Payload.ColorSpaceID)
 	components := r.CSI.Payload.ColorComponents
+	var recoveredComponents recoveredColorComponents
+	switch len(components) {
+	case 2:
+		recoveredComponents = recoveredColorComponents{
+			White: formatColorComponent(components[0]), Alpha: formatColorComponent(components[1]),
+		}
+	case 4:
+		recoveredComponents = recoveredColorComponents{
+			Red: formatColorComponent(components[0]), Green: formatColorComponent(components[1]),
+			Blue: formatColorComponent(components[2]), Alpha: formatColorComponent(components[3]),
+		}
+	default:
+		return entry, resource, fmt.Errorf("Color rendition has %d components, expected 2 or 4", len(components))
+	}
 	entry = recoveredColorEntry{
 		Idiom: idiomName(attributeValue(r.Key, 15)),
 		Color: recoveredColorValue{
 			ColorSpace: colorSpace,
-			Components: recoveredColorComponents{
-				Red: formatColorComponent(components[0]), Green: formatColorComponent(components[1]),
-				Blue: formatColorComponent(components[2]), Alpha: formatColorComponent(components[3]),
-			},
+			Components: recoveredComponents,
 		},
 	}
 	appearance := c.appearanceName(attributeValue(r.Key, 7))
@@ -426,10 +469,14 @@ func recoveredColorSpace(id uint32) string {
 	switch id {
 	case 1:
 		return "srgb"
+	case 2:
+		return "gray-gamma-22"
 	case 3:
 		return "display-p3"
 	case 4:
 		return "extended-srgb"
+	case 6:
+		return "extended-gray"
 	default:
 		return fmt.Sprintf("coreui-%d", id)
 	}
@@ -451,18 +498,38 @@ func recoveredColorAppearances(name string) []recoveredAppearance {
 	switch name {
 	case "", "UIAppearanceAny":
 		return nil
-	case "UIAppearanceDark":
+	case "UIAppearanceDark", "NSAppearanceNameDarkAqua":
 		return []recoveredAppearance{{Appearance: "luminosity", Value: "dark"}}
-	case "UIAppearanceLight":
+	case "UIAppearanceLight", "NSAppearanceNameAqua":
 		return []recoveredAppearance{{Appearance: "luminosity", Value: "light"}}
 	case "UIAppearanceHighContrast":
 		return []recoveredAppearance{{Appearance: "contrast", Value: "high"}}
-	case "UIAppearanceDarkHighContrast":
+	case "UIAppearanceDarkHighContrast", "NSAppearanceNameAccessibilityHighContrastDarkAqua":
 		return []recoveredAppearance{{Appearance: "luminosity", Value: "dark"}, {Appearance: "contrast", Value: "high"}}
-	case "UIAppearanceLightHighContrast":
+	case "UIAppearanceLightHighContrast", "NSAppearanceNameAccessibilityHighContrastAqua":
 		return []recoveredAppearance{{Appearance: "luminosity", Value: "light"}, {Appearance: "contrast", Value: "high"}}
 	default:
 		return []recoveredAppearance{{Appearance: "luminosity", Value: strings.ToLower(strings.TrimPrefix(name, "UIAppearance"))}}
+	}
+}
+
+func structuredResourceSuffix(layout uint16) string {
+	switch layout {
+	case 1019:
+		return ".iconstack.json"
+	case 1020:
+		return ".icongroup.json"
+	case 1021:
+		return ".gradient.json"
+	default:
+		return ""
+	}
+}
+
+func recoveredStructuredMetadata(r Rendition) recoveredStructuredResource {
+	return recoveredStructuredResource{
+		Layout: r.CSI.Layout, LayoutName: r.CSI.LayoutName, Name: r.CSI.Name,
+		PixelFormat: r.CSI.PixelFormat, Key: r.Key, TLVs: r.CSI.TLVs, Gradient: r.CSI.Payload.Gradient,
 	}
 }
 
